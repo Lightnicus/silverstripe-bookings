@@ -54,6 +54,7 @@ use SunnySideUp\EmailReminder\Model\EmailReminderNotificationSchedule;
  * @method Member BookingMember()
  * @method Tour Tour()
  * @method ManyManyList|ReferralOption[] ReferralOptions()
+ * @method ManyManyList|TicketType[] TicketTypes()
  */
 class Booking extends TourBaseClass
 {
@@ -98,6 +99,7 @@ class Booking extends TourBaseClass
 
     private static $many_many = [
         'ReferralOptions' => ReferralOption::class,
+        'TicketTypes' => TicketType::class,
     ];
 
     //######################

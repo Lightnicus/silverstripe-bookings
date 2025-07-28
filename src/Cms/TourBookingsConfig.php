@@ -17,6 +17,7 @@ use Sunnysideup\Bookings\Model\Booking;
 use Sunnysideup\Bookings\Model\DateInfo;
 use Sunnysideup\Bookings\Model\ReferralOption;
 use Sunnysideup\Bookings\Model\TimesForTour;
+use Sunnysideup\Bookings\Model\TicketType;
 use Sunnysideup\Bookings\Model\Tour;
 use Sunnysideup\Bookings\Model\TourBookingSettings;
 use Sunnysideup\Bookings\Model\Waitlister;
@@ -37,6 +38,7 @@ class TourBookingsConfig extends ModelAdmin
     public $showSearchForm = [
         DateInfo::class,
         TimesForTour::class,
+        TicketType::class,
         ReferralOption::class,
         Tour::class,
         Booking::class,
@@ -55,6 +57,10 @@ class TourBookingsConfig extends ModelAdmin
         TimesForTour::class => [
             'dataClass' => TimesForTour::class,
             'title' => 'Tour Times',
+        ],
+        TicketType::class => [
+            'dataClass' => TicketType::class,
+            'title' => 'Ticket Types',
         ],
         ReferralOption::class => [
             'dataClass' => ReferralOption::class,
@@ -132,6 +138,14 @@ class TourBookingsConfig extends ModelAdmin
                 $gridFieldConfig->removeComponentsByType(GridFieldPrintButton::class);
                 $gridFieldConfig->addComponent(new GridFieldSortableRows('SortOrder'));
             }
+        }
+
+        if (self::is_model_class($this->modelClass, TicketType::class)) {
+            if ($gridFieldConfig) {
+                $gridFieldConfig->removeComponentsByType(GridFieldExportButton::class);
+                $gridFieldConfig->removeComponentsByType(GridFieldPrintButton::class);
+            }
+            $this->addTicketTypeExplanations($fields);
         }
 
         if (self::is_model_class($this->modelClass, Tour::class)) {
@@ -257,6 +271,42 @@ class TourBookingsConfig extends ModelAdmin
                       <p>
                         <strong>Editing rules:</strong><br>
                         Click on a rule to edit it. Here you can change its Start and End date, Frequency, etc
+                      </p>
+                '
+            )
+        );
+    }
+
+    protected function addTicketTypeExplanations($fields)
+    {
+        $fields->insertAfter(
+            $this->sanitiseClassName($this->modelClass),
+            LiteralField::create(
+                'TicketTypeExplanation',
+                '
+
+                      <p style="margin-top: 15px">Above is a list of ticket types that customers can select when booking tours.</p>
+
+                      <p>
+                        <strong>How it works:</strong><br>
+                        Each ticket type has a name, price, and active status. Only active ticket types will be available for customers to select during the booking process.
+                      </p>
+
+                      <p>
+                        <strong>Examples:</strong><br>
+                        • Adult - $25.00<br>
+                        • Child (under 12) - $15.00<br>
+                        • Senior (65+) - $20.00<br>
+                        • VIP Experience - $50.00<br>
+                        • Free Tour - $0.00
+                      </p>
+
+                      <p>
+                        <strong>Tips:</strong><br>
+                        • Use descriptive names that customers will understand<br>
+                        • Set price to 0 for free tickets<br>
+                        • Uncheck "Active" to temporarily disable a ticket type<br>
+                        • Ticket types cannot be deleted if they have associated bookings
                       </p>
                 '
             )
