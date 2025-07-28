@@ -12,9 +12,11 @@ use SilverStripe\Forms\Tab;
 use SilverStripe\Forms\TabSet;
 use SilverStripe\Forms\HeaderField;
 use SilverStripe\Forms\LiteralField;
+use SilverStripe\Forms\RequiredFields;
 use SilverStripe\ORM\DataObject;
 use SilverStripe\ORM\DB;
 use SilverStripe\ORM\FieldType\DBMoney;
+use SilverStripe\ORM\ValidationException;
 
 /**
  * Class \Sunnysideup\Bookings\Model\TicketType
@@ -23,6 +25,8 @@ use SilverStripe\ORM\FieldType\DBMoney;
  * @property string $Description
  * @property string $Price
  * @property bool $Active
+ * @property int $SpotsKids
+ * @property int $SpotsAdults
  * @method ManyManyList|Booking[] Bookings()
  */
 class TicketType extends TourBaseClass
@@ -46,6 +50,8 @@ class TicketType extends TourBaseClass
         'Description' => 'Text',
         'Price' => 'Money',
         'Active' => 'Boolean',
+        'SpotsKids' => 'Int',
+        'SpotsAdults' => 'Int',
     ];
 
     private static $casting = [
@@ -78,6 +84,8 @@ class TicketType extends TourBaseClass
 
     private static $defaults = [
         'Active' => true,
+        'SpotsKids' => 1,
+        'SpotsAdults' => 1,
     ];
 
     //######################
@@ -89,6 +97,8 @@ class TicketType extends TourBaseClass
         'Description' => 'Description',
         'Price' => 'Price',
         'Active' => 'Available for Booking',
+        'SpotsKids' => 'Spots for Kids',
+        'SpotsAdults' => 'Spots for Adults',
     ];
 
     private static $summary_fields = [
@@ -96,6 +106,8 @@ class TicketType extends TourBaseClass
         'Description' => 'Description',
         'PriceSummary' => 'Price',
         'ActiveNice' => 'Active',
+        'SpotsKids' => 'Kids Spots',
+        'SpotsAdults' => 'Adult Spots',
         'TotalQuantitySold' => 'Quantity Sold',
         'TotalRevenueFormatted' => 'Total Revenue',
     ];
@@ -104,6 +116,8 @@ class TicketType extends TourBaseClass
         'Name' => 'PartialMatchFilter',
         'Description' => 'PartialMatchFilter',
         'Active' => 'ExactMatchFilter',
+        'SpotsKids' => 'ExactMatchFilter',
+        'SpotsAdults' => 'ExactMatchFilter',
     ];
 
     //######################
@@ -215,6 +229,29 @@ class TicketType extends TourBaseClass
         return '$0.00';
     }
 
+    /**
+     * Get the total number of spots (kids + adults)
+     */
+    public function getTotalSpots()
+    {
+        return $this->SpotsKids + $this->SpotsAdults;
+    }
+
+    /**
+     * Validate that the sum of SpotsKids and SpotsAdults is at least 1
+     */
+    public function validate()
+    {
+        $result = parent::validate();
+        
+        $totalSpots = $this->getTotalSpots();
+        if ($totalSpots < 1) {
+            $result->addError('The sum of Kids Spots and Adult Spots must be at least 1.');
+        }
+        
+        return $result;
+    }
+
 
 
     //######################
@@ -271,10 +308,21 @@ class TicketType extends TourBaseClass
             ->setDescription('Uncheck to temporarily disable this ticket type from being selected during booking')
         );
 
+        $fields->addFieldToTab('Root.Main', NumericField::create('SpotsKids', 'Spots for Kids')
+            ->setDescription('Number of spots this ticket type takes up for kids. The sum of Kids and Adult spots must be at least 1.')
+            ->setScale(0)
+        );
+
+        $fields->addFieldToTab('Root.Main', NumericField::create('SpotsAdults', 'Spots for Adults')
+            ->setDescription('Number of spots this ticket type takes up for adults. The sum of Kids and Adult spots must be at least 1.')
+            ->setScale(0)
+        );
+
         // Add helpful information
         $fields->addFieldToTab('Root.Main', HeaderField::create('InfoHeader', 'Information', 4));
         $fields->addFieldToTab('Root.Main', LiteralField::create('InfoText', 
-            '<p><strong>Note:</strong> Only active ticket types will be available for customers to select during booking.</p>'
+            '<p><strong>Note:</strong> Only active ticket types will be available for customers to select during booking.</p>
+            <p><strong>Important:</strong> The sum of Kids Spots and Adult Spots must be at least 1 for each ticket type.</p>'
         ));
 
         return $fields;
@@ -291,6 +339,14 @@ class TicketType extends TourBaseClass
         // Ensure price is not negative
         if ($this->Price && $this->Price->getAmount() < 0) {
             $this->Price->setAmount(0);
+        }
+
+        // Ensure spots fields are not negative
+        if ($this->SpotsKids < 0) {
+            $this->SpotsKids = 0;
+        }
+        if ($this->SpotsAdults < 0) {
+            $this->SpotsAdults = 0;
         }
     }
 
@@ -321,24 +377,32 @@ class TicketType extends TourBaseClass
                     'Description' => 'Standard adult ticket for ages 13 and above',
                     'Price' => 25.00,
                     'Active' => true,
+                    'SpotsKids' => 0,
+                    'SpotsAdults' => 1,
                 ],
                 [
                     'Name' => 'Child (under 12)',
                     'Description' => 'Discounted ticket for children under 12 years old',
                     'Price' => 15.00,
                     'Active' => true,
+                    'SpotsKids' => 1,
+                    'SpotsAdults' => 0,
                 ],
                 [
                     'Name' => 'Senior (65+)',
                     'Description' => 'Discounted ticket for seniors aged 65 and above',
                     'Price' => 20.00,
                     'Active' => true,
+                    'SpotsKids' => 0,
+                    'SpotsAdults' => 1,
                 ],
                 [
                     'Name' => 'VIP Experience',
                     'Description' => 'Premium experience with exclusive access and personalized service',
                     'Price' => 50.00,
                     'Active' => true,
+                    'SpotsKids' => 0,
+                    'SpotsAdults' => 1,
                 ],
             ];
 
@@ -348,6 +412,8 @@ class TicketType extends TourBaseClass
                 $ticketType->Description = $typeData['Description'];
                 $ticketType->Price = \SilverStripe\ORM\FieldType\DBMoney::create_field('Money', $typeData['Price'], 'NZD');
                 $ticketType->Active = $typeData['Active'];
+                $ticketType->SpotsKids = $typeData['SpotsKids'];
+                $ticketType->SpotsAdults = $typeData['SpotsAdults'];
                 $ticketType->write();
             }
 
