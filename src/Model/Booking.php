@@ -49,6 +49,8 @@ use SunnySideUp\EmailReminder\Model\EmailReminderNotificationSchedule;
  * @property bool $Cancelled
  * @property bool $TotalGuestsAdminOverride
  * @property string $ReferralText
+ * @property bool $PeanutAllergyConfirmation
+ * @property bool $MarketingEmailOptOut
  * @property int $BookingMemberID
  * @property int $TourID
  * @method Member BookingMember()
@@ -90,6 +92,8 @@ class Booking extends TourBaseClass
         'Cancelled' => 'Boolean',
         'TotalGuestsAdminOverride' => 'Boolean',
         'ReferralText' => 'Varchar',
+        'PeanutAllergyConfirmation' => 'Boolean',
+        'MarketingEmailOptOut' => 'Boolean',
     ];
 
     private static $has_one = [
@@ -149,7 +153,7 @@ class Booking extends TourBaseClass
         'TotalNumberOfGuests' => 'Number of People',
         'BookingMember' => 'Contact',
         'HasArrived' => 'Have Arrived',
-        'NumberOfChildren' => 'Number of Children attending the tour',
+
         'PrimaryPhone' => 'Mobile Phone',
         'SecondaryPhone' => 'Secondary Contact Phone',
         'CountryOfOrigin' => 'What country are your from?',
@@ -157,6 +161,8 @@ class Booking extends TourBaseClass
         'NumberOfAdults' => 'Adults',
         'SpecialAssistanceRequired' => 'Special Assistance',
         'SpecialAssistanceRequiredInfo' => 'Please let us know how we can help?',
+        'PeanutAllergyConfirmation' => 'Peanut Allergy Confirmation',
+        'MarketingEmailOptOut' => 'Marketing Email Opt Out',
     ];
 
     private static $field_labels_right = [
@@ -538,13 +544,7 @@ class Booking extends TourBaseClass
             )
         );
 
-        $fields->replaceField(
-            'NumberOfChildren',
-            NumericField::create(
-                'NumberOfChildren',
-                $labels['NumberOfChildren']
-            )->setScale(0)
-        );
+
 
         $fields->replaceField(
             'CountryOfOrigin',
