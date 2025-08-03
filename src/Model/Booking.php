@@ -128,6 +128,8 @@ class Booking extends TourBaseClass
         'TotalNumberOfGuests',
         'InitiatingFirstName',
         'InitiatingEmail',
+        'PeanutAllergyConfirmation',
+        'ReferralOptions',
     ];
 
     private static $searchable_fields = [
@@ -452,6 +454,22 @@ class Booking extends TourBaseClass
                 
                 // Only perform guest validations and tour availability checks on saved objects
                 if ($this->exists()) {
+                    // Validate peanut allergy confirmation
+                    if (!(bool) $this->PeanutAllergyConfirmation) {
+                        $result->addError(
+                            'You must confirm that no one in your group is allergic to peanuts.',
+                            'UNIQUE_' . $this->ClassName . '_PeanutAllergyConfirmation'
+                        );
+                    }
+                    
+                    // Validate referral options
+                    if ($this->ReferralOptions()->count() === 0) {
+                        $result->addError(
+                            'Please select how you heard about our tours.',
+                            'UNIQUE_' . $this->ClassName . '_ReferralOptions'
+                        );
+                    }
+                    
                     $tour = Tour::get()->byID($this->TourID);
                     if (null !== $tour && (bool) $this->Cancelled !== true) {
                         $availableRaw = $tour->getNumberOfPlacesAvailable()->RAW();
@@ -627,6 +645,17 @@ class Booking extends TourBaseClass
         $fields->removeByName('ReferralText');
         $fields->removeByName('ReferralOptions');
 
+        // Ensure PeanutAllergyConfirmation field is visible in CMS
+        if (!$fields->dataFieldByName('PeanutAllergyConfirmation')) {
+            $fields->insertAfter(
+                'MarketingEmailOptOut',
+                CheckboxField::create(
+                    'PeanutAllergyConfirmation',
+                    'Peanut Allergy Confirmation'
+                )->setDescription('Confirms that no one in the group is allergic to peanuts')
+            );
+        }
+
         $fields->addFieldsToTab(
             'Root.ReferralInfo',
             [
@@ -777,6 +806,16 @@ class Booking extends TourBaseClass
                 'TourID'
             )
         );
+
+        // Ensure PeanutAllergyConfirmation field is included
+        if (!$fields->dataFieldByName('PeanutAllergyConfirmation')) {
+            $fields->push(
+                CheckboxField::create(
+                    'PeanutAllergyConfirmation',
+                    'I confirm no one in my group is allergic to peanuts'
+                )
+            );
+        }
 
         return $fields;
     }

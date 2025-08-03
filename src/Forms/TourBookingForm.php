@@ -295,6 +295,24 @@ class TourBookingForm extends Form
             return $this->controller->redirectBack();
         }
         
+        // Validate peanut allergy confirmation
+        if (!isset($data['PeanutAllergyConfirmation']) || !(bool) $data['PeanutAllergyConfirmation']) {
+            $this->sessionError(
+                'You must confirm that no one in your group is allergic to peanuts.',
+                'bad'
+            );
+            return $this->controller->redirectBack();
+        }
+        
+        // Validate referral options
+        if (!isset($data['ReferralOptions']) || empty($data['ReferralOptions'])) {
+            $this->sessionError(
+                'Please select how you heard about our tours.',
+                'bad'
+            );
+            return $this->controller->redirectBack();
+        }
+        
         if ($this->currentBooking) {
             $newBooking = false;
             if (isset($data['ConfirmingEmail']) && $data['ConfirmingEmail'] === $this->currentBooking->InitiatingEmail) {
