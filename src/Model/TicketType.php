@@ -58,14 +58,8 @@ class TicketType extends TourBaseClass
         'Active' => 'Boolean',
     ];
 
-    private static $many_many = [
+    private static $belongs_many_many = [
         'Bookings' => Booking::class,
-    ];
-
-    private static $many_many_extraFields = [
-        'Bookings' => [
-            'Quantity' => 'Int',
-        ],
     ];
 
     //######################

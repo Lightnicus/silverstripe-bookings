@@ -194,9 +194,62 @@ class TourBookingForm extends Form
             }
         }
 
+        // Handle ticket types for new booking system
+        $quantities = [];
+        $totalGuests = 0;
+        
+        // Parse ticket type quantities from form data
+        foreach ($data as $fieldName => $value) {
+            if (strpos($fieldName, 'TicketType_') === 0 && strpos($fieldName, '_Quantity') !== false) {
+                $parts = explode('_', $fieldName);
+                if (count($parts) >= 3 && is_numeric($parts[1])) {
+                    $ticketTypeId = (int) $parts[1];
+                    $quantity = (int) $value;
+                    
+                    if ($quantity > 0) {
+                        $quantities[$ticketTypeId] = $quantity;
+                    }
+                }
+            }
+        }
+        
+        // Validate ticket types
+        if (!empty($quantities)) {
+            $totalAdults = 0;
+            $totalKids = 0;
+            
+            foreach ($quantities as $ticketTypeId => $quantity) {
+                $ticketType = \Sunnysideup\Bookings\Model\TicketType::get()->byID($ticketTypeId);
+                if ($ticketType) {
+                    $adultsForThisType = $ticketType->SpotsAdults * $quantity;
+                    $kidsForThisType = $ticketType->SpotsKids * $quantity;
+                    
+                    $totalAdults += $adultsForThisType;
+                    $totalKids += $kidsForThisType;
+                    $totalGuests += $adultsForThisType + $kidsForThisType;
+                }
+            }
+            
+            // Validate: No children without adults
+            if ($totalKids > 0 && $totalAdults === 0) {
+                $this->sessionError('Children must be with an adult.', 'bad');
+                return $this->controller->redirectBack();
+            }
+            
+            // Validate: At least one spot selected
+            if ($totalGuests === 0) {
+                $this->sessionError('Please select at least one ticket.', 'bad');
+                return $this->controller->redirectBack();
+            }
+        } else {
+            // Fallback to old TotalNumberOfGuests field if no ticket types
+            $totalGuests = (int) $data['TotalNumberOfGuests'];
+        }
+
+        // Validate against tour availability
         if ($this->currentTour) {
             $spacesLeft = $this->currentTour->getNumberOfPlacesAvailable()->value;
-            if ((int) $data['TotalNumberOfGuests'] > $spacesLeft) {
+            if ($totalGuests > $spacesLeft) {
                 $message = 'Sorry, there are no spaces left.';
                 if ($spacesLeft > 1) {
                     $message = 'Sorry there are only ' . $spacesLeft . ' spaces';
@@ -210,9 +263,10 @@ class TourBookingForm extends Form
                 return $this->controller->redirectBack();
             }
         }
+        
         if ($this->currentBooking) {
             $newBooking = false;
-            if ($data['ConfirmingEmail'] === $this->currentBooking->InitiatingEmail) {
+            if (isset($data['ConfirmingEmail']) && $data['ConfirmingEmail'] === $this->currentBooking->InitiatingEmail) {
                 //do nothing
             } else {
                 $settings = TourBookingSettings::inst();
@@ -227,7 +281,24 @@ class TourBookingForm extends Form
         } else {
             $this->currentBooking = Booking::create();
         }
+        
         $form->saveInto($this->currentBooking);
+        
+        // Update TotalNumberOfGuests to reflect the actual total from ticket types
+        if (!empty($quantities)) {
+            $this->currentBooking->TotalNumberOfGuests = $totalGuests;
+            
+            // Calculate and set NumberOfChildren from ticket types
+            $totalKids = 0;
+            foreach ($quantities as $ticketTypeId => $quantity) {
+                $ticketType = \Sunnysideup\Bookings\Model\TicketType::get()->byID($ticketTypeId);
+                if ($ticketType) {
+                    $totalKids += $ticketType->SpotsKids * $quantity;
+                }
+            }
+            $this->currentBooking->NumberOfChildren = $totalKids;
+        }
+        
         $validationObject = $this->currentBooking->validate();
         if (! $validationObject->isValid()) {
             foreach ($validationObject->getMessages() as $message) {
@@ -238,6 +309,12 @@ class TourBookingForm extends Form
 
             return $this->controller->redirectBack();
         }
+        
+        // Save ticket types if any were selected
+        if (!empty($quantities)) {
+            $this->currentBooking->saveTicketTypes($quantities);
+        }
+        
         if (isset($data['ReferralOptions'])) {
             foreach ($data['ReferralOptions'] as $referralOptionID) {
                 $referralOptionID = (int) $referralOptionID;

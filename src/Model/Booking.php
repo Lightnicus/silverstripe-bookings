@@ -106,6 +106,12 @@ class Booking extends TourBaseClass
         'TicketTypes' => TicketType::class,
     ];
 
+    private static $many_many_extraFields = [
+        'TicketTypes' => [
+            'Quantity' => 'Int',
+        ],
+    ];
+
     //######################
     //## Further DB Field Details
     //######################
@@ -188,7 +194,10 @@ class Booking extends TourBaseClass
         'Created.Short' => 'Created',
         'LastEdited.Ago' => 'Edited',
         'Code' => 'Reference',
-        'TotalNumberOfGuests' => 'Guests',
+        'getTotalSpots' => 'Total Spots',
+        'getNumberOfAdults' => 'Adults',
+        'getNumberOfKids' => 'Kids',
+        'getTicketTypesSummary' => 'Ticket Types',
         'InitiatingEmail' => 'Email',
         'PrimaryPhone' => 'Phone 1',
         'SecondaryPhone' => 'Phone 2',
@@ -215,13 +224,27 @@ class Booking extends TourBaseClass
 
     public function getTitle()
     {
-        $v =
-            'Booking by ' . $this->BookingMember()->getTitle() .
-            ' for ' . $this->getNumberOfAdults()->Nice() . ' adults,' .
-            ' and ' . $this->NumberOfChildren . ' children, ' .
-            ' on ' . $this->Tour()->Date .
-            ' at ' . $this->Tour()->StartTime .
-            ' by ' . $this->InitiatingEmail;
+        // Use ticket types if available, otherwise fall back to old system
+        if ($this->TicketTypes()->count() > 0) {
+            $totalAdults = $this->getTotalAdultsFromTicketTypes();
+            $totalKids = $this->getTotalKidsFromTicketTypes();
+            $totalSpots = $this->getTotalSpotsFromTicketTypes();
+            
+            $v = 'Booking by ' . $this->BookingMember()->getTitle() .
+                ' for ' . $totalAdults . ' adults,' .
+                ' and ' . $totalKids . ' children, ' .
+                ' on ' . $this->Tour()->Date .
+                ' at ' . $this->Tour()->StartTime .
+                ' by ' . $this->InitiatingEmail;
+        } else {
+            // Fallback to old system
+            $v = 'Booking by ' . $this->BookingMember()->getTitle() .
+                ' for ' . $this->getNumberOfAdults()->Nice() . ' adults,' .
+                ' and ' . $this->NumberOfChildren . ' children, ' .
+                ' on ' . $this->Tour()->Date .
+                ' at ' . $this->Tour()->StartTime .
+                ' by ' . $this->InitiatingEmail;
+        }
 
         return DBField::create_field('Varchar', $v);
     }
@@ -233,7 +256,72 @@ class Booking extends TourBaseClass
 
     public function getNumberOfAdults()
     {
-        $v = $this->TotalNumberOfGuests - $this->NumberOfChildren;
+        // Use ticket types if available, otherwise fall back to old calculation
+        if ($this->TicketTypes()->count() > 0) {
+            $v = $this->getTotalAdultsFromTicketTypes();
+        } else {
+            $v = $this->TotalNumberOfGuests - $this->NumberOfChildren;
+        }
+
+        return DBField::create_field('Int', $v);
+    }
+
+    /**
+     * Get total number of kids (from ticket types or fallback)
+     */
+    public function getNumberOfKids()
+    {
+        // Use ticket types if available, otherwise fall back to old calculation
+        if ($this->TicketTypes()->count() > 0) {
+            $v = $this->getTotalKidsFromTicketTypes();
+        } else {
+            $v = $this->NumberOfChildren;
+        }
+
+        return DBField::create_field('Int', $v);
+    }
+
+    /**
+     * Get total number of spots (from ticket types or fallback)
+     */
+    public function getTotalSpots()
+    {
+        // Use ticket types if available, otherwise fall back to old calculation
+        if ($this->TicketTypes()->count() > 0) {
+            $v = $this->getTotalSpotsFromTicketTypes();
+        } else {
+            $v = $this->TotalNumberOfGuests;
+        }
+
+        return DBField::create_field('Int', $v);
+    }
+
+    /**
+     * Get the total number of guests (calculated from ticket types or database field)
+     */
+    public function getTotalNumberOfGuests()
+    {
+        // Use ticket types if available, otherwise fall back to database field
+        if ($this->TicketTypes()->count() > 0) {
+            $v = $this->getTotalSpotsFromTicketTypes();
+        } else {
+            $v = $this->TotalNumberOfGuests;
+        }
+
+        return DBField::create_field('Int', $v);
+    }
+
+    /**
+     * Get the number of children (calculated from ticket types or database field)
+     */
+    public function getNumberOfChildren()
+    {
+        // Use ticket types if available, otherwise fall back to database field
+        if ($this->TicketTypes()->count() > 0) {
+            $v = $this->getTotalKidsFromTicketTypes();
+        } else {
+            $v = $this->NumberOfChildren;
+        }
 
         return DBField::create_field('Int', $v);
     }
@@ -445,6 +533,26 @@ class Booking extends TourBaseClass
                     $fields->dataFieldByName($replaceField)->performReadonlyTransformation()->setTitle('Original        ' . str_replace('Initiating', '', $replaceField))
                 );
             }
+            
+            // Replace TotalNumberOfGuests with calculated field
+            $fields->replaceField(
+                'TotalNumberOfGuests',
+                ReadonlyField::create(
+                    'TotalNumberOfGuests',
+                    'Number of People',
+                    $this->getTotalNumberOfGuests()->Nice()
+                )->setDescription('Including children')
+            );
+            
+            // Add NumberOfChildren field right after Number of People
+            $fields->insertAfter(
+                'TotalNumberOfGuests',
+                ReadonlyField::create(
+                    'NumberOfChildren',
+                    'Number of Children',
+                    $this->getNumberOfChildren()->Nice()
+                )
+            );
         } else {
             $fields->removeByName('BookingMemberID');
             $fields->removeByName('Date');
@@ -480,6 +588,49 @@ class Booking extends TourBaseClass
                     'ReferralText',
                     'More Details'
                 )->setDescription('There will only be data here if the user provides more details when selecting the "other" option.'),
+            ]
+        );
+
+        // Add ticket types tab
+        $fields->addFieldsToTab(
+            'Root.TicketTypes',
+            [
+                HeaderField::create(
+                    'TicketTypesHeading',
+                    'Selected Ticket Types',
+                    2
+                ),
+                GridField::create(
+                    'TicketTypes',
+                    'Ticket Types',
+                    $this->TicketTypes(),
+                    GridFieldConfig_RecordViewer::create()
+                ),
+                ReadonlyField::create(
+                    'TicketTypesSummary',
+                    'Summary',
+                    $this->getTicketTypesSummary()
+                ),
+                ReadonlyField::create(
+                    'TotalSpots',
+                    'Total Spots',
+                    $this->getTotalSpots()->Nice()
+                ),
+                ReadonlyField::create(
+                    'TotalAdults',
+                    'Total Adults',
+                    $this->getNumberOfAdults()->Nice()
+                ),
+                ReadonlyField::create(
+                    'TotalKids',
+                    'Total Kids',
+                    $this->getNumberOfKids()->Nice()
+                ),
+                ReadonlyField::create(
+                    'TotalPrice',
+                    'Total Price',
+                    '$' . number_format($this->getTotalPriceFromTicketTypes(), 2)
+                ),
             ]
         );
 
@@ -680,5 +831,203 @@ class Booking extends TourBaseClass
     protected function CurrentMemberIsOwner(): bool
     {
         return (int) Security::getCurrentUser()?->ID === (int) $this->BookingMemberID;
+    }
+
+    //######################
+    //## TicketType Methods
+    //######################
+
+    /**
+     * Parse ticket type quantities from form data
+     * 
+     * @param array $data Form data
+     * @return array Array of [TicketTypeID => Quantity]
+     */
+    public function parseTicketTypeQuantities(array $data): array
+    {
+        $quantities = [];
+        
+        foreach ($data as $fieldName => $value) {
+            if (strpos($fieldName, 'TicketType_') === 0 && strpos($fieldName, '_Quantity') !== false) {
+                // Extract ticket type ID from field name (e.g., "TicketType_123_Quantity" -> 123)
+                $parts = explode('_', $fieldName);
+                if (count($parts) >= 3 && is_numeric($parts[1])) {
+                    $ticketTypeId = (int) $parts[1];
+                    $quantity = (int) $value;
+                    
+                    if ($quantity > 0) {
+                        $quantities[$ticketTypeId] = $quantity;
+                    }
+                }
+            }
+        }
+        
+        return $quantities;
+    }
+
+    /**
+     * Validate ticket type selection
+     * 
+     * @param array $quantities Array of [TicketTypeID => Quantity]
+     * @return string|null Error message or null if valid
+     */
+    public function validateTicketTypes(array $quantities): ?string
+    {
+        if (empty($quantities)) {
+            return null; // No ticket types selected is valid
+        }
+
+        $totalAdults = 0;
+        $totalKids = 0;
+        $totalSpots = 0;
+
+        foreach ($quantities as $ticketTypeId => $quantity) {
+            $ticketType = TicketType::get()->byID($ticketTypeId);
+            if (!$ticketType) {
+                continue;
+            }
+
+            // Calculate spots for this ticket type
+            $adultsForThisType = $ticketType->SpotsAdults * $quantity;
+            $kidsForThisType = $ticketType->SpotsKids * $quantity;
+            
+            $totalAdults += $adultsForThisType;
+            $totalKids += $kidsForThisType;
+            $totalSpots += $adultsForThisType + $kidsForThisType;
+        }
+
+        // Validate: No children without adults
+        if ($totalKids > 0 && $totalAdults === 0) {
+            return 'Children must be with an adult.';
+        }
+
+        // Validate: At least one spot selected
+        if ($totalSpots === 0) {
+            return 'Please select at least one ticket.';
+        }
+
+        // Validate against tour availability (if tour is set)
+        if ($this->TourID) {
+            $tour = $this->Tour();
+            if ($tour && $tour->exists()) {
+                $availableSpots = $tour->getNumberOfPlacesAvailable()->value;
+                if ($totalSpots > $availableSpots) {
+                    return "Sorry, there are only {$availableSpots} spots available for this tour.";
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Save ticket types with quantities to the booking
+     * 
+     * @param array $quantities Array of [TicketTypeID => Quantity]
+     */
+    public function saveTicketTypes(array $quantities): void
+    {
+        // Remove existing ticket types
+        $this->TicketTypes()->removeAll();
+        
+        // Add new ticket types with quantities
+        foreach ($quantities as $ticketTypeId => $quantity) {
+            $ticketType = TicketType::get()->byID($ticketTypeId);
+            if ($ticketType && $quantity > 0) {
+                $this->TicketTypes()->add($ticketType, ['Quantity' => $quantity]);
+            }
+        }
+    }
+
+    /**
+     * Get total adults from ticket types
+     * 
+     * @return int Total number of adults
+     */
+    public function getTotalAdultsFromTicketTypes(): int
+    {
+        $totalAdults = 0;
+        
+        foreach ($this->TicketTypes() as $ticketType) {
+            $quantity = $this->TicketTypes()->getExtraData('Quantity', $ticketType->ID);
+            // Ensure quantity is an integer
+            $quantity = is_array($quantity) ? (int)($quantity['Quantity'] ?? 0) : (int)$quantity;
+            $totalAdults += $ticketType->SpotsAdults * $quantity;
+        }
+        
+        return $totalAdults;
+    }
+
+    /**
+     * Get total kids from ticket types
+     * 
+     * @return int Total number of kids
+     */
+    public function getTotalKidsFromTicketTypes(): int
+    {
+        $totalKids = 0;
+        
+        foreach ($this->TicketTypes() as $ticketType) {
+            $quantity = $this->TicketTypes()->getExtraData('Quantity', $ticketType->ID);
+            // Ensure quantity is an integer
+            $quantity = is_array($quantity) ? (int)($quantity['Quantity'] ?? 0) : (int)$quantity;
+            $totalKids += $ticketType->SpotsKids * $quantity;
+        }
+        
+        return $totalKids;
+    }
+
+    /**
+     * Get total spots from ticket types
+     * 
+     * @return int Total number of spots
+     */
+    public function getTotalSpotsFromTicketTypes(): int
+    {
+        return $this->getTotalAdultsFromTicketTypes() + $this->getTotalKidsFromTicketTypes();
+    }
+
+    /**
+     * Get total price from ticket types
+     * 
+     * @return float Total price
+     */
+    public function getTotalPriceFromTicketTypes(): float
+    {
+        $totalPrice = 0;
+        
+        foreach ($this->TicketTypes() as $ticketType) {
+            $quantity = $this->TicketTypes()->getExtraData('Quantity', $ticketType->ID);
+            // Ensure quantity is an integer
+            $quantity = is_array($quantity) ? (int)($quantity['Quantity'] ?? 0) : (int)$quantity;
+            $price = $ticketType->getPriceAmount();
+            $totalPrice += $price * $quantity;
+        }
+        
+        return $totalPrice;
+    }
+
+    /**
+     * Get formatted ticket types summary for admin display
+     * 
+     * @return string Formatted ticket types summary
+     */
+    public function getTicketTypesSummary()
+    {
+        if ($this->TicketTypes()->count() === 0) {
+            return 'No ticket types selected';
+        }
+
+        $summary = [];
+        foreach ($this->TicketTypes() as $ticketType) {
+            $quantity = $this->TicketTypes()->getExtraData('Quantity', $ticketType->ID);
+            // Ensure quantity is an integer
+            $quantity = is_array($quantity) ? (int)($quantity['Quantity'] ?? 0) : (int)$quantity;
+            if ($quantity > 0) {
+                $summary[] = "{$quantity}x {$ticketType->Name}";
+            }
+        }
+
+        return implode(', ', $summary);
     }
 }
