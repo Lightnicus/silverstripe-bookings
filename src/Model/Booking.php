@@ -207,7 +207,6 @@ class Booking extends TourBaseClass
 
     private static $casting = [
         'Title' => 'Varchar',
-        'NumberOfAdults' => 'Int',
         'BookingReference' => 'Varchar',
         'ContactSummary' => 'Varchar',
     ];
@@ -260,7 +259,16 @@ class Booking extends TourBaseClass
         if ($this->TicketTypes()->count() > 0) {
             $v = $this->getTotalAdultsFromTicketTypes();
         } else {
-            $v = $this->TotalNumberOfGuests - $this->NumberOfChildren;
+            // Extract raw values for arithmetic operations
+            $totalGuests = $this->TotalNumberOfGuests;
+            if ($totalGuests instanceof \SilverStripe\ORM\FieldType\DBField) {
+                $totalGuests = $totalGuests->RAW();
+            }
+            $numberOfChildren = $this->NumberOfChildren;
+            if ($numberOfChildren instanceof \SilverStripe\ORM\FieldType\DBField) {
+                $numberOfChildren = $numberOfChildren->RAW();
+            }
+            $v = (int) $totalGuests - (int) $numberOfChildren;
         }
 
         return DBField::create_field('Int', $v);
@@ -276,6 +284,10 @@ class Booking extends TourBaseClass
             $v = $this->getTotalKidsFromTicketTypes();
         } else {
             $v = $this->NumberOfChildren;
+            if ($v instanceof \SilverStripe\ORM\FieldType\DBField) {
+                $v = $v->RAW();
+            }
+            $v = (int) $v;
         }
 
         return DBField::create_field('Int', $v);
@@ -291,6 +303,10 @@ class Booking extends TourBaseClass
             $v = $this->getTotalSpotsFromTicketTypes();
         } else {
             $v = $this->TotalNumberOfGuests;
+            if ($v instanceof \SilverStripe\ORM\FieldType\DBField) {
+                $v = $v->RAW();
+            }
+            $v = (int) $v;
         }
 
         return DBField::create_field('Int', $v);
@@ -305,8 +321,14 @@ class Booking extends TourBaseClass
         if ($this->TicketTypes()->count() > 0) {
             $v = $this->getTotalSpotsFromTicketTypes();
         } else {
-            $v = $this->TotalNumberOfGuests;
+            $v = $this->dbObject('TotalNumberOfGuests')->RAW();
         }
+
+        // Ensure we pass a raw integer, not a DBField object
+        if ($v instanceof \SilverStripe\ORM\FieldType\DBField) {
+            $v = $v->RAW();
+        }
+        $v = (int) $v;
 
         return DBField::create_field('Int', $v);
     }
@@ -320,8 +342,14 @@ class Booking extends TourBaseClass
         if ($this->TicketTypes()->count() > 0) {
             $v = $this->getTotalKidsFromTicketTypes();
         } else {
-            $v = $this->NumberOfChildren;
+            $v = $this->dbObject('NumberOfChildren')->RAW();
         }
+
+        // Ensure we pass a raw integer, not a DBField object
+        if ($v instanceof \SilverStripe\ORM\FieldType\DBField) {
+            $v = $v->RAW();
+        }
+        $v = (int) $v;
 
         return DBField::create_field('Int', $v);
     }
@@ -384,9 +412,15 @@ class Booking extends TourBaseClass
     //## write Section
     //######################
 
-    public function validate()
+    public function validate(array $ticketTypeData = null)
     {
-        $result = parent::validate();
+        // Only call parent::validate() on saved objects
+        if ($this->exists()) {
+            $result = parent::validate();
+        } else {
+            $result = \SilverStripe\ORM\ValidationResult::create();
+        }
+        
         //check for other bookings with same email ....
         if ($this->TourID) {
             if ((bool) $this->Cancelled !== true) {
@@ -415,42 +449,65 @@ class Booking extends TourBaseClass
                         );
                     }
                 }
-                $tour = Tour::get()->byID($this->TourID);
-                if (null !== $tour && (bool) $this->Cancelled !== true) {
-                    $availableRaw = $tour->getNumberOfPlacesAvailable()->RAW();
-                    if ($this->exists()) {
+                
+                // Only perform guest validations and tour availability checks on saved objects
+                if ($this->exists()) {
+                    $tour = Tour::get()->byID($this->TourID);
+                    if (null !== $tour && (bool) $this->Cancelled !== true) {
+                        $availableRaw = $tour->getNumberOfPlacesAvailable()->RAW();
                         //we have to get the booking from the DB again because that value for $this->TotalNumberOfGuests has already changed
                         $beforeUpdate = Booking::get()->byID($this->ID);
-                        $placesAvailable = $availableRaw + $beforeUpdate->TotalNumberOfGuests;
-                        //one extra check to make sure placesAvailable is never greater the how many places available for the tour
-                        if ($placesAvailable > $tour->TotalSpacesAtStart) {
-                            $placesAvailable = $tour->TotalSpacesAtStart;
+                        $totalGuests = $beforeUpdate->TotalNumberOfGuests;
+                        if ($totalGuests instanceof \SilverStripe\ORM\FieldType\DBField) {
+                            $totalGuests = $totalGuests->RAW();
                         }
-                    } else {
-                        $placesAvailable = $availableRaw;
+                        $placesAvailable = $availableRaw + (int) $totalGuests;
+                        //one extra check to make sure placesAvailable is never greater the how many places available for the tour
+                        $totalSpaces = $tour->TotalSpacesAtStart;
+                        if ($totalSpaces instanceof \SilverStripe\ORM\FieldType\DBField) {
+                            $totalSpaces = $totalSpaces->RAW();
+                        }
+                        if ($placesAvailable > (int) $totalSpaces) {
+                            $placesAvailable = (int) $totalSpaces;
+                        }
+                        
+                        //admins can override the following validation
+                        $adminOverrideNotSet = !(bool) $this->TotalGuestsAdminOverride;
+                        $totalGuests = $this->TotalNumberOfGuests;
+                        if ($totalGuests instanceof \SilverStripe\ORM\FieldType\DBField) {
+                            $totalGuests = $totalGuests->RAW();
+                        }
+                        if ((int) $totalGuests > $placesAvailable && $adminOverrideNotSet) {
+                            $result->addError(
+                                'Sorry, there are not enough places available for your booking.
+                                        Your booking is for ' . (int) $totalGuests . ' and the places still available is: ' . ($placesAvailable > 0 ? $placesAvailable : 0),
+                                'UNIQUE_' . $this->ClassName . '_NumberOfPlacesAvailable'
+                            );
+                        }
                     }
-                    //admins can override the following validation
-                    $adminOverrideNotSet = !(bool) $this->TotalGuestsAdminOverride;
-                    if ($this->TotalNumberOfGuests > $placesAvailable && $adminOverrideNotSet) {
+                    
+                    $totalGuests = $this->TotalNumberOfGuests;
+                    if ($totalGuests instanceof \SilverStripe\ORM\FieldType\DBField) {
+                        $totalGuests = $totalGuests->RAW();
+                    }
+                    if ((int) $totalGuests < 1) {
                         $result->addError(
-                            'Sorry, there are not enough places available for your booking.
-                                    Your booking is for ' . $this->TotalNumberOfGuests . ' and the places still available is: ' . ($placesAvailable > 0 ? $placesAvailable : 0),
-                            'UNIQUE_' . $this->ClassName . '_NumberOfPlacesAvailable'
+                            'You need to have at least one person attending to make a booking.',
+                            'UNIQUE_' . $this->ClassName . '_TotalNumberOfGuests'
+                        );
+                    }
+                    
+                    $numberOfChildren = $this->NumberOfChildren;
+                    if ($numberOfChildren instanceof \SilverStripe\ORM\FieldType\DBField) {
+                        $numberOfChildren = $numberOfChildren->RAW();
+                    }
+                    if ((int) $totalGuests < ((int) $numberOfChildren + 1)) {
+                        $result->addError(
+                            'You need to have at least one adult attending. It appears you only have children listed for this booking.',
+                            'UNIQUE_' . $this->ClassName . '_NumberOfChildren'
                         );
                     }
                 }
-            }
-            if ((int) $this->TotalNumberOfGuests < 1) {
-                $result->addError(
-                    'You need to have at least one person attending to make a booking.',
-                    'UNIQUE_' . $this->ClassName . '_TotalNumberOfGuests'
-                );
-            }
-            if ((int) $this->TotalNumberOfGuests < ((int) $this->NumberOfChildren + 1)) {
-                $result->addError(
-                    'You need to have at least one adult attending. It appears you only have children listed for this booking.',
-                    'UNIQUE_' . $this->ClassName . '_NumberOfChildren'
-                );
             }
         }
         return $result;
@@ -944,12 +1001,30 @@ class Booking extends TourBaseClass
      * 
      * @return int Total number of adults
      */
-    public function getTotalAdultsFromTicketTypes(): int
+
+
+    public function getTotalAdultsFromTicketTypes(array $ticketTypeData = null): int
     {
         $totalAdults = 0;
         
-        foreach ($this->TicketTypes() as $ticketType) {
-            $quantity = $this->TicketTypes()->getExtraData('Quantity', $ticketType->ID);
+        // If we have ticket type data passed in, use that
+        if ($ticketTypeData !== null) {
+            foreach ($ticketTypeData as $ticketTypeId => $quantity) {
+                $ticketType = TicketType::get()->byID($ticketTypeId);
+                if ($ticketType) {
+                    $totalAdults += $ticketType->SpotsAdults * $quantity;
+                }
+            }
+            return $totalAdults;
+        }
+        
+
+        
+        // Fallback to database relationship for saved bookings
+        $ticketTypes = $this->TicketTypes();
+        
+        foreach ($ticketTypes as $ticketType) {
+            $quantity = $ticketTypes->getExtraData('Quantity', $ticketType->ID);
             // Ensure quantity is an integer
             $quantity = is_array($quantity) ? (int)($quantity['Quantity'] ?? 0) : (int)$quantity;
             $totalAdults += $ticketType->SpotsAdults * $quantity;
@@ -963,12 +1038,28 @@ class Booking extends TourBaseClass
      * 
      * @return int Total number of kids
      */
-    public function getTotalKidsFromTicketTypes(): int
+    public function getTotalKidsFromTicketTypes(array $ticketTypeData = null): int
     {
         $totalKids = 0;
         
-        foreach ($this->TicketTypes() as $ticketType) {
-            $quantity = $this->TicketTypes()->getExtraData('Quantity', $ticketType->ID);
+        // If we have ticket type data passed in, use that
+        if ($ticketTypeData !== null) {
+            foreach ($ticketTypeData as $ticketTypeId => $quantity) {
+                $ticketType = TicketType::get()->byID($ticketTypeId);
+                if ($ticketType) {
+                    $totalKids += $ticketType->SpotsKids * $quantity;
+                }
+            }
+            return $totalKids;
+        }
+        
+
+        
+        // Fallback to database relationship for saved bookings
+        $ticketTypes = $this->TicketTypes();
+        
+        foreach ($ticketTypes as $ticketType) {
+            $quantity = $ticketTypes->getExtraData('Quantity', $ticketType->ID);
             // Ensure quantity is an integer
             $quantity = is_array($quantity) ? (int)($quantity['Quantity'] ?? 0) : (int)$quantity;
             $totalKids += $ticketType->SpotsKids * $quantity;
@@ -982,9 +1073,9 @@ class Booking extends TourBaseClass
      * 
      * @return int Total number of spots
      */
-    public function getTotalSpotsFromTicketTypes(): int
+    public function getTotalSpotsFromTicketTypes(array $ticketTypeData = null): int
     {
-        return $this->getTotalAdultsFromTicketTypes() + $this->getTotalKidsFromTicketTypes();
+        return $this->getTotalAdultsFromTicketTypes($ticketTypeData) + $this->getTotalKidsFromTicketTypes($ticketTypeData);
     }
 
     /**
@@ -992,12 +1083,29 @@ class Booking extends TourBaseClass
      * 
      * @return float Total price
      */
-    public function getTotalPriceFromTicketTypes(): float
+    public function getTotalPriceFromTicketTypes(array $ticketTypeData = null): float
     {
         $totalPrice = 0;
         
-        foreach ($this->TicketTypes() as $ticketType) {
-            $quantity = $this->TicketTypes()->getExtraData('Quantity', $ticketType->ID);
+        // If we have ticket type data passed in, use that
+        if ($ticketTypeData !== null) {
+            foreach ($ticketTypeData as $ticketTypeId => $quantity) {
+                $ticketType = TicketType::get()->byID($ticketTypeId);
+                if ($ticketType) {
+                    $price = $ticketType->getPriceAmount();
+                    $totalPrice += $price * $quantity;
+                }
+            }
+            return $totalPrice;
+        }
+        
+
+        
+        // Fallback to database relationship for saved bookings
+        $ticketTypes = $this->TicketTypes();
+        
+        foreach ($ticketTypes as $ticketType) {
+            $quantity = $ticketTypes->getExtraData('Quantity', $ticketType->ID);
             // Ensure quantity is an integer
             $quantity = is_array($quantity) ? (int)($quantity['Quantity'] ?? 0) : (int)$quantity;
             $price = $ticketType->getPriceAmount();
@@ -1014,13 +1122,15 @@ class Booking extends TourBaseClass
      */
     public function getTicketTypesSummary()
     {
-        if ($this->TicketTypes()->count() === 0) {
+        $ticketTypes = $this->TicketTypes();
+        
+        if ($ticketTypes->count() === 0) {
             return 'No ticket types selected';
         }
 
         $summary = [];
-        foreach ($this->TicketTypes() as $ticketType) {
-            $quantity = $this->TicketTypes()->getExtraData('Quantity', $ticketType->ID);
+        foreach ($ticketTypes as $ticketType) {
+            $quantity = $ticketTypes->getExtraData('Quantity', $ticketType->ID);
             // Ensure quantity is an integer
             $quantity = is_array($quantity) ? (int)($quantity['Quantity'] ?? 0) : (int)$quantity;
             if ($quantity > 0) {

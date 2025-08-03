@@ -264,6 +264,37 @@ class TourBookingForm extends Form
             }
         }
         
+        // Guest validations for unsaved objects (moved from Booking->validate())
+        if ($totalGuests < 1) {
+            $this->sessionError(
+                'You need to have at least one person attending to make a booking.',
+                'bad'
+            );
+            return $this->controller->redirectBack();
+        }
+        
+        // Check for children without adults
+        $totalKids = 0;
+        if (!empty($quantities)) {
+            foreach ($quantities as $ticketTypeId => $quantity) {
+                $ticketType = \Sunnysideup\Bookings\Model\TicketType::get()->byID($ticketTypeId);
+                if ($ticketType) {
+                    $totalKids += $ticketType->SpotsKids * $quantity;
+                }
+            }
+        } else {
+            // Fallback to old system for NumberOfChildren
+            $totalKids = (int) ($data['NumberOfChildren'] ?? 0);
+        }
+        
+        if ($totalKids > 0 && ($totalGuests - $totalKids) < 1) {
+            $this->sessionError(
+                'You need to have at least one adult attending. It appears you only have children listed for this booking.',
+                'bad'
+            );
+            return $this->controller->redirectBack();
+        }
+        
         if ($this->currentBooking) {
             $newBooking = false;
             if (isset($data['ConfirmingEmail']) && $data['ConfirmingEmail'] === $this->currentBooking->InitiatingEmail) {
@@ -299,7 +330,7 @@ class TourBookingForm extends Form
             $this->currentBooking->NumberOfChildren = $totalKids;
         }
         
-        $validationObject = $this->currentBooking->validate();
+        $validationObject = $this->currentBooking->validate($quantities);
         if (! $validationObject->isValid()) {
             foreach ($validationObject->getMessages() as $message) {
                 $this->sessionError(

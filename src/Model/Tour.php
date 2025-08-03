@@ -270,12 +270,12 @@ class Tour extends TourBaseClass
         } elseif ('<br>' === $v) {
             $v = '';
         }
-        if ($this->IsFull()->raw()) {
+        if ($this->IsFull()->RAW()) {
             $settings = TourBookingSettings::inst();
             $v .= $settings->TourFullMessage;
         } else {
-            $singularPlural = $this->NumberOfPlacesAvailable()->raw() > 1 ? ' spaces' : ' space';
-            $v .= '<strong>' . $this->NumberOfPlacesAvailable()->raw() . $singularPlural . ' left</strong>';
+                    $singularPlural = $this->NumberOfPlacesAvailable()->RAW() > 1 ? ' spaces' : ' space';
+        $v .= '<strong>' . $this->NumberOfPlacesAvailable()->RAW() . $singularPlural . ' left</strong>';
         }
 
         return DBField::create_field('HTMLText', $v);
@@ -333,7 +333,11 @@ class Tour extends TourBaseClass
         $v = 0;
         /** @var Booking $booking */
         foreach ($this->ValidBookings() as $booking) {
-            $v += $booking->TotalNumberOfGuests;
+            $totalGuests = $booking->TotalNumberOfGuests;
+            if ($totalGuests instanceof \SilverStripe\ORM\FieldType\DBField) {
+                $totalGuests = $totalGuests->RAW();
+            }
+            $v += $totalGuests;
         }
 
         return DBField::create_field('Int', $v);
@@ -346,7 +350,13 @@ class Tour extends TourBaseClass
 
     public function getNumberOfPlacesAvailable()
     {
-        $v = $this->IsClosed ? 0 : $this->TotalSpacesAtStart - $this->getNumberOfPlacesBooked()->RAW();
+        $totalSpaces = $this->TotalSpacesAtStart;
+        if ($totalSpaces instanceof \SilverStripe\ORM\FieldType\DBField) {
+            $totalSpaces = $totalSpaces->RAW();
+        }
+        $totalSpaces = $totalSpaces ?: 0;
+        
+        $v = $this->IsClosed ? 0 : $totalSpaces - $this->getNumberOfPlacesBooked()->RAW();
 
         return DBField::create_field('Int', $v);
     }
@@ -404,7 +414,11 @@ class Tour extends TourBaseClass
         /** @var Booking $booking */
 
         foreach ($this->ValidBookings() as $booking) {
-            $v += (int) $booking->NumberOfChildren;
+            $numberOfChildren = $booking->NumberOfChildren;
+            if ($numberOfChildren instanceof \SilverStripe\ORM\FieldType\DBField) {
+                $numberOfChildren = $numberOfChildren->RAW();
+            }
+            $v += (int) $numberOfChildren;
         }
 
         return DBField::create_field('Int', $v);
@@ -608,7 +622,7 @@ class Tour extends TourBaseClass
             $settings = TourBookingSettings::inst();
             $spacesAvailableEmail = $settings->TourSpacesAvailableEmail();
 
-            $placesAvailable = $this->NumberOfPlacesAvailable()->raw();
+            $placesAvailable = $this->NumberOfPlacesAvailable()->RAW();
             $waitlisters = $this->Waitlisters()->filter(['TotalNumberOfGuests:LessThanOrEqual' => $placesAvailable]);
 
             foreach ($waitlisters as $waitlister) {
