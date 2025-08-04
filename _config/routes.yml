@@ -1,0 +1,7 @@
+---
+Name: bookings-payment-routes
+After: omnipay-routes
+---
+SilverStripe\Control\Director:
+  rules:
+    'payment-webhook' : Sunnysideup\Bookings\Pages\TourBookingPageController 

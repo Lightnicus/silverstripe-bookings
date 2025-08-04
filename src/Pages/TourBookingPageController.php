@@ -23,6 +23,10 @@ use Sunnysideup\Bookings\Model\DateInfo;
 use Sunnysideup\Bookings\Model\Tour;
 use Sunnysideup\Bookings\Model\TourBookingSettings;
 use Sunnysideup\Bookings\Model\Waitlister;
+use SilverStripe\Omnipay\Model\Payment;
+use SilverStripe\Omnipay\Service\ServiceFactory;
+use SilverStripe\Control\HTTPResponse;
+use SilverStripe\Core\Environment;
 
 /**
  * Class \Sunnysideup\Bookings\Pages\TourBookingPageController
@@ -82,6 +86,12 @@ class TourBookingPageController extends PageController
         'SelfCheckInForm' => true,
         'selfcheckin' => true,
         'confirmselfcheckin' => true,
+
+        //payment
+        'paymentcallback' => true,
+        'paymentwebhook' => true,
+        'paymentsuccess' => true,
+        'paymentfailure' => true,
     ];
 
     //######################
@@ -712,5 +722,170 @@ class TourBookingPageController extends PageController
         }
 
         return $finalArrayList;
+    }
+    
+    /**
+     * Handle payment callback after 3D Secure authentication
+     */
+    public function paymentcallback($request)
+    {
+        $status = $request->param('Status');
+        $payment = $this->getPaymentFromRequest($request);
+        
+        if (!$payment) {
+            return $this->httpError(404, 'Payment not found');
+        }
+        
+        // Complete the payment after 3D Secure authentication
+        $service = ServiceFactory::create()->getService($payment, ServiceFactory::INTENT_PURCHASE);
+        $response = $service->complete();
+        
+        if ($response->isSuccessful()) {
+            // Update booking status
+            $booking = $this->getBookingFromPayment($payment);
+            if ($booking) {
+                $booking->updatePaymentStatus('Paid', [
+                    'gateway' => 'Stripe',
+                    'reference' => $response->getTransactionReference(),
+                    'payment_intent_id' => $response->getPaymentIntentReference(),
+                ]);
+            }
+            
+            return $this->redirect($this->Link('paymentsuccess'));
+        } else {
+            // Update booking status to failed
+            $booking = $this->getBookingFromPayment($payment);
+            if ($booking) {
+                $booking->updatePaymentStatus('Failed', [
+                    'gateway' => 'Stripe',
+                    'reference' => $response->getTransactionReference(),
+                ]);
+            }
+            
+            return $this->redirect($this->Link('paymentfailure'));
+        }
+    }
+    
+    /**
+     * Handle Stripe webhooks
+     */
+    public function paymentwebhook($request)
+    {
+        $payload = $request->getBody();
+        $sigHeader = $request->getHeader('Stripe-Signature');
+        $endpointSecret = Environment::getEnv('STRIPE_WEBHOOK_SECRET');
+        
+        // Only verify signature if webhook secret is configured
+        if ($endpointSecret) {
+            try {
+                $event = \Stripe\Webhook::constructEvent(
+                    $payload, $sigHeader, $endpointSecret
+                );
+            } catch(\UnexpectedValueException $e) {
+                return $this->httpError(400, 'Invalid payload');
+            } catch(\Stripe\Exception\SignatureVerificationException $e) {
+                return $this->httpError(400, 'Invalid signature');
+            }
+        } else {
+            // No verification - parse JSON directly (less secure but functional)
+            $event = json_decode($payload);
+            if (!$event) {
+                return $this->httpError(400, 'Invalid JSON payload');
+            }
+        }
+        
+        // Handle the event
+        switch ($event->type) {
+            case 'payment_intent.succeeded':
+                $paymentIntent = $event->data->object;
+                $this->handlePaymentSuccess($paymentIntent);
+                break;
+            case 'payment_intent.payment_failed':
+                $paymentIntent = $event->data->object;
+                $this->handlePaymentFailure($paymentIntent);
+                break;
+            default:
+                // Unexpected event type
+                return $this->httpError(400, 'Unexpected event type');
+        }
+        
+        return new HTTPResponse('OK', 200);
+    }
+    
+    /**
+     * Handle successful payment via webhook
+     */
+    protected function handlePaymentSuccess($paymentIntent)
+    {
+        // Find booking by payment intent ID
+        $booking = Booking::get()
+            ->filter('PaymentIntentId', $paymentIntent->id)
+            ->first();
+        
+        if ($booking) {
+            $booking->updatePaymentStatus('Paid', [
+                'gateway' => 'Stripe',
+                'reference' => $paymentIntent->id,
+                'payment_intent_id' => $paymentIntent->id,
+            ]);
+        }
+    }
+    
+    /**
+     * Handle failed payment via webhook
+     */
+    protected function handlePaymentFailure($paymentIntent)
+    {
+        $booking = Booking::get()
+            ->filter('PaymentIntentId', $paymentIntent->id)
+            ->first();
+        
+        if ($booking) {
+            $booking->updatePaymentStatus('Failed', [
+                'gateway' => 'Stripe',
+                'reference' => $paymentIntent->id,
+                'payment_intent_id' => $paymentIntent->id,
+            ]);
+        }
+    }
+    
+    /**
+     * Get payment from request
+     */
+    protected function getPaymentFromRequest($request)
+    {
+        $identifier = $request->param('Identifier');
+        return Payment::get()
+            ->filter('Identifier', $identifier)
+            ->first();
+    }
+    
+    /**
+     * Get booking from payment
+     */
+    protected function getBookingFromPayment($payment)
+    {
+        // Find booking that owns this payment
+        return Booking::get()
+            ->filter('Payments.ID', $payment->ID)
+            ->first();
+    }
+    
+    /**
+     * Payment success page
+     */
+    public function paymentsuccess($request)
+    {
+        // Handle successful payment page
+        return $this->renderWith(['PaymentSuccess', 'Page']);
+    }
+    
+    /**
+     * Payment failure page
+     */
+    public function paymentfailure($request)
+    {
+        // Handle failed payment page
+        return $this->renderWith(['PaymentFailure', 'Page']);
     }
 }

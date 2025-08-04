@@ -32,6 +32,12 @@ use SunnySideUp\EmailReminder\Model\EmailReminderNotificationSchedule;
 /**
  * Class \Sunnysideup\Bookings\Model\Booking
  *
+ * @property string $PaymentStatus
+ * @property string $PaymentAmount
+ * @property string $PaymentGateway
+ * @property string $PaymentReference
+ * @property string $PaymentDate
+ * @property string $PaymentIntentId
  * @property string $Code
  * @property string $Date
  * @property int $TotalNumberOfGuests
@@ -55,8 +61,10 @@ use SunnySideUp\EmailReminder\Model\EmailReminderNotificationSchedule;
  * @property int $TourID
  * @method Member BookingMember()
  * @method Tour Tour()
+ * @method DataList|Payment[] Payments()
  * @method ManyManyList|ReferralOption[] ReferralOptions()
  * @method ManyManyList|TicketType[] TicketTypes()
+ * @mixin BookingPaymentExtension
  */
 class Booking extends TourBaseClass
 {

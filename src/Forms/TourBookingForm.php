@@ -20,6 +20,9 @@ use Sunnysideup\Bookings\Model\Booking;
 use Sunnysideup\Bookings\Model\ReferralOption;
 use Sunnysideup\Bookings\Model\Tour;
 use Sunnysideup\Bookings\Model\TourBookingSettings;
+use SilverStripe\Omnipay\Model\Payment;
+use SilverStripe\Omnipay\Service\ServiceFactory;
+use Exception;
 
 class TourBookingForm extends Form
 {
@@ -381,6 +384,21 @@ class TourBookingForm extends Form
         $code = substr((string) $this->currentBooking->Code, 0, 9);
         $settings = TourBookingSettings::inst();
 
+        // Handle payment if required and enabled
+        if ($this->isPaymentEnabled() && $this->currentBooking->requiresPayment()) {
+            $paymentResult = $this->processPayment($this->currentBooking, $data);
+            if (!$paymentResult['success']) {
+                $this->currentBooking->delete();
+                $this->sessionError($paymentResult['message'], 'bad');
+                return $this->controller->redirectBack();
+            }
+            
+            // Handle 3D Secure redirect
+            if (isset($paymentResult['redirect'])) {
+                return $this->controller->redirect($paymentResult['redirect']);
+            }
+        }
+
         if ($newBooking) {
             $confirmationEmail = $settings->BookingConfirmationEmail();
             $confirmationEmail->sendOne($this->currentBooking);
@@ -402,5 +420,59 @@ class TourBookingForm extends Form
         $data = $this->getData();
 
         Controller::curr()->getRequest()->getSession()->set("FormInfo.{$this->FormName()}.data", $data);
+    }
+    
+    /**
+     * Check if payment is enabled in settings
+     */
+    protected function isPaymentEnabled(): bool
+    {
+        return TourBookingSettings::inst()->EnablePayments;
+    }
+    
+    /**
+     * Process payment for booking
+     */
+    protected function processPayment(Booking $booking, array $data): array
+    {
+        try {
+            // Create payment via SilverStripe Omnipay
+            $payment = Payment::create()
+                ->init('Stripe', $booking->getPaymentAmount(), 'NZD')
+                ->setSuccessUrl($this->controller->Link('paymentcallback/complete'))
+                ->setFailureUrl($this->controller->Link('paymentcallback/failure'));
+            
+            $payment->write();
+            
+            // Process payment with Stripe token
+            if (isset($data['stripeToken'])) {
+                $service = ServiceFactory::create()->getService($payment, ServiceFactory::INTENT_PURCHASE);
+                $response = $service->initiate([
+                    'token' => $data['stripeToken'],
+                    'description' => 'Booking: ' . $booking->Code,
+                ]);
+                
+                if ($response->isSuccessful()) {
+                    // Immediate confirmation
+                    $booking->updatePaymentStatus('Paid', [
+                        'gateway' => 'Stripe',
+                        'reference' => $response->getTransactionReference(),
+                        'payment_intent_id' => $response->getPaymentIntentReference(),
+                    ]);
+                    return ['success' => true];
+                } elseif ($response->isRedirect()) {
+                    // 3D Secure required - store payment intent ID
+                    $booking->PaymentIntentId = $response->getPaymentIntentReference();
+                    $booking->write();
+                    return ['success' => true, 'redirect' => $response->getRedirectUrl()];
+                } else {
+                    return ['success' => false, 'message' => 'Payment failed: ' . $response->getMessage()];
+                }
+            } else {
+                return ['success' => false, 'message' => 'Payment token not provided'];
+            }
+        } catch (Exception $e) {
+            return ['success' => false, 'message' => 'Payment error: ' . $e->getMessage()];
+        }
     }
 }

@@ -1,0 +1,11 @@
+---
+Name: bookings-payment-extensions
+After: framework/*, cms/*
+---
+Sunnysideup\Bookings\Model\Booking:
+  extensions:
+    - Sunnysideup\Bookings\Extensions\BookingPaymentExtension
+    
+Sunnysideup\Bookings\Forms\TourBookingForm:
+  extensions:
+    - Sunnysideup\Bookings\Extensions\TourBookingFormPaymentExtension 

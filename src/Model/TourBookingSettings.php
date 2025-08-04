@@ -4,10 +4,13 @@ namespace Sunnysideup\Bookings\Model;
 
 use SilverStripe\Control\Director;
 use SilverStripe\Core\Config\Config;
+use SilverStripe\Core\Environment;
+use SilverStripe\Forms\CheckboxField;
 use SilverStripe\Forms\DropdownField;
 use SilverStripe\Forms\HTMLEditor\HTMLEditorField;
 use SilverStripe\Forms\LiteralField;
 use SilverStripe\Forms\TextareaField;
+use SilverStripe\Forms\TextField;
 use SilverStripe\Forms\NumericField;
 use SilverStripe\ORM\DataObject;
 use SilverStripe\ORM\DB;
@@ -35,6 +38,8 @@ use Sunnysideup\SanitiseClassName\Sanitiser;
  * @property string $ConfirmationPageContent
  * @property int $BookingTimeCutOff
  * @property string $WaitlistSuccessMessage
+ * @property bool $EnablePayments
+ * @property string $PaymentGateway
  * @property int $AdministratorID
  * @property int $BookingConfirmationEmailID
  * @property int $UpdateConfirmationEmailID
@@ -80,6 +85,8 @@ class TourBookingSettings extends TourBaseClass
         'ConfirmationPageContent' => 'HTMLText',
         'BookingTimeCutOff' => 'Int(10)',
         'WaitlistSuccessMessage' => 'Text',
+        'EnablePayments' => 'Boolean',
+        'PaymentGateway' => 'Varchar(50)',
     ];
 
     private static $has_one = [
@@ -98,6 +105,8 @@ class TourBookingSettings extends TourBaseClass
     private static $defaults = [
         'MaximumNumberPerGroup' => '10',
         'NumberOfDaysToGenerateToursInAdvance' => 60,
+        'EnablePayments' => false, // Disabled by default
+        'PaymentGateway' => 'Stripe',
     ];
 
     private static $default_sort = 'ID ASC';
@@ -400,6 +409,33 @@ class TourBookingSettings extends TourBaseClass
                 $formField
             );
         }
+
+        // Add payment settings tab
+        $fields->addFieldsToTab(
+            'Root.Payments',
+            [
+                CheckboxField::create('EnablePayments', 'Enable Online Payments')
+                    ->setDescription('Enable Stripe payment processing for bookings'),
+                DropdownField::create('PaymentGateway', 'Payment Gateway', [
+                    'Stripe' => 'Stripe',
+                ]),
+                LiteralField::create(
+                    'StripeKeysInfo',
+                    '<div class="field text">
+                        <label class="left">Stripe Environment Variables</label>
+                        <div class="middleColumn">
+                            <p>All Stripe configuration is handled via environment variables:</p>
+                            <ul style="margin-left: 20px; margin-bottom: 10px;">
+                                <li><strong>STRIPE_SECRET_KEY:</strong> ' . (Environment::getEnv('STRIPE_SECRET_KEY') ? '<span style="color: green;">✓ Configured</span>' : '<span style="color: red;">✗ Not configured</span>') . ' <em>(Required)</em></li>
+                                <li><strong>STRIPE_PUBLISHABLE_KEY:</strong> ' . (Environment::getEnv('STRIPE_PUBLISHABLE_KEY') ? '<span style="color: green;">✓ Configured</span>' : '<span style="color: red;">✗ Not configured</span>') . ' <em>(Required)</em></li>
+                                <li><strong>STRIPE_WEBHOOK_SECRET:</strong> ' . (Environment::getEnv('STRIPE_WEBHOOK_SECRET') ? '<span style="color: green;">✓ Configured</span>' : '<span style="color: orange;">⚠ Optional</span>') . ' <em>(Optional - for enhanced security)</em></li>
+                            </ul>
+                            <p><small>STRIPE_SECRET_KEY and STRIPE_PUBLISHABLE_KEY are required. STRIPE_WEBHOOK_SECRET is optional but recommended for production.</small></p>
+                        </div>
+                    </div>'
+                )
+            ]
+        );
 
         return $fields;
     }

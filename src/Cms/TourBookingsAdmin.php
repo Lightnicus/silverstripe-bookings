@@ -17,6 +17,7 @@ use Sunnysideup\Bookings\Forms\Actions\OpenAction;
 use Sunnysideup\Bookings\Pages\TourBookingPage;
 use Sunnysideup\Bookings\Model\Booking;
 use Sunnysideup\Bookings\Model\Tour;
+use Sunnysideup\Bookings\Model\TourBookingSettings;
 use Sunnysideup\Bookings\Model\Waitlister;
 
 /**
@@ -66,6 +67,16 @@ class TourBookingsAdmin extends ModelAdmin
         } elseif (TourBookingsConfig::is_model_class($this->modelClass, Booking::class) || TourBookingsConfig::is_model_class($this->modelClass, Waitlister::class)) {
             $tourIds = Tour::get()->filter($this->futureTourFilter())->columnUnique();
             $list = $list->filter(['TourID' => $tourIds]);
+        }
+
+        // Only show payment columns if payments are enabled
+        if (TourBookingsConfig::is_model_class($this->modelClass, Booking::class) && TourBookingSettings::inst()->EnablePayments) {
+            $list = $list->addFields([
+                'PaymentStatus',
+                'PaymentAmount',
+                'PaymentDate',
+                'PaymentReference',
+            ]);
         }
 
         return $list;
