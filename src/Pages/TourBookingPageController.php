@@ -27,6 +27,9 @@ use SilverStripe\Omnipay\Model\Payment;
 use SilverStripe\Omnipay\Service\ServiceFactory;
 use SilverStripe\Control\HTTPResponse;
 use SilverStripe\Core\Environment;
+use Psr\Log\LoggerInterface;
+use Sunnysideup\Bookings\Model\PaymentConstants;
+use Exception;
 
 /**
  * Class \Sunnysideup\Bookings\Pages\TourBookingPageController
@@ -741,25 +744,24 @@ class TourBookingPageController extends PageController
         $response = $service->complete();
         
         if ($response->isSuccessful()) {
-            // Update booking status
+            // Update booking status using centralized method
             $booking = $this->getBookingFromPayment($payment);
             if ($booking) {
-                $booking->updatePaymentStatus('Paid', [
-                    'gateway' => 'Stripe',
-                    'reference' => $response->getTransactionReference(),
-                    'payment_intent_id' => $response->getPaymentIntentReference(),
-                ]);
+                $booking->markPaymentSuccessful(
+                    $response->getTransactionReference(),
+                    $response->getPaymentIntentReference()
+                );
             }
             
             return $this->redirect($this->Link('paymentsuccess'));
         } else {
-            // Update booking status to failed
+            // Update booking status to failed using centralized method
             $booking = $this->getBookingFromPayment($payment);
             if ($booking) {
-                $booking->updatePaymentStatus('Failed', [
-                    'gateway' => 'Stripe',
-                    'reference' => $response->getTransactionReference(),
-                ]);
+                $booking->markPaymentFailed(
+                    $response->getTransactionReference(),
+                    $response->getMessage()
+                );
             }
             
             return $this->redirect($this->Link('paymentfailure'));
@@ -771,82 +773,153 @@ class TourBookingPageController extends PageController
      */
     public function paymentwebhook($request)
     {
-        $payload = $request->getBody();
-        $sigHeader = $request->getHeader('Stripe-Signature');
-        $endpointSecret = Environment::getEnv('STRIPE_WEBHOOK_SECRET');
+        $logger = Injector::inst()->get(LoggerInterface::class);
         
-        // Only verify signature if webhook secret is configured
-        if ($endpointSecret) {
+        try {
+            $payload = $request->getBody();
+            $sigHeader = $request->getHeader('Stripe-Signature');
+            $endpointSecret = Environment::getEnv('STRIPE_WEBHOOK_SECRET');
+            
+            // SECURITY: Always require webhook secret
+            if (!$endpointSecret) {
+                $logger->error('Webhook endpoint called without STRIPE_WEBHOOK_SECRET configured');
+                return $this->httpError(400, 'Webhook secret required');
+            }
+            
             try {
-                $event = \Stripe\Webhook::constructEvent(
-                    $payload, $sigHeader, $endpointSecret
-                );
+                $event = \Stripe\Webhook::constructEvent($payload, $sigHeader, $endpointSecret);
             } catch(\UnexpectedValueException $e) {
+                $logger->warning('Invalid webhook payload received', ['error' => $e->getMessage()]);
                 return $this->httpError(400, 'Invalid payload');
             } catch(\Stripe\Exception\SignatureVerificationException $e) {
+                $logger->warning('Invalid webhook signature received', ['error' => $e->getMessage()]);
                 return $this->httpError(400, 'Invalid signature');
             }
-        } else {
-            // No verification - parse JSON directly (less secure but functional)
-            $event = json_decode($payload);
-            if (!$event) {
-                return $this->httpError(400, 'Invalid JSON payload');
+            
+            // Process webhook with proper error handling
+            $result = $this->processWebhookEvent($event);
+            
+            if ($result) {
+                return new HTTPResponse('OK', 200);
+            } else {
+                return $this->httpError(400, 'Event processing failed');
             }
+            
+        } catch (Exception $e) {
+            $logger->critical('Unexpected webhook error', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            return $this->httpError(500, 'Internal server error');
         }
-        
+    }
+    
+    /**
+     * Process webhook event with replay protection
+     */
+    protected function processWebhookEvent($event): bool
+    {
         // Handle the event
         switch ($event->type) {
             case 'payment_intent.succeeded':
                 $paymentIntent = $event->data->object;
-                $this->handlePaymentSuccess($paymentIntent);
-                break;
+                return $this->handlePaymentSuccess($paymentIntent, $event->id, $event->created);
             case 'payment_intent.payment_failed':
                 $paymentIntent = $event->data->object;
-                $this->handlePaymentFailure($paymentIntent);
-                break;
+                return $this->handlePaymentFailure($paymentIntent, $event->id, $event->created);
             default:
-                // Unexpected event type
-                return $this->httpError(400, 'Unexpected event type');
+                // Log unexpected event type but don't fail
+                $logger = Injector::inst()->get(LoggerInterface::class);
+                $logger->info('Unexpected webhook event type received: ' . $event->type);
+                return true;
         }
-        
-        return new HTTPResponse('OK', 200);
     }
     
     /**
      * Handle successful payment via webhook
      */
-    protected function handlePaymentSuccess($paymentIntent)
+    protected function handlePaymentSuccess($paymentIntent, string $eventId = '', int $eventTimestamp = 0): bool
     {
+        $logger = Injector::inst()->get(LoggerInterface::class);
+        
         // Find booking by payment intent ID
         $booking = Booking::get()
             ->filter('PaymentIntentId', $paymentIntent->id)
             ->first();
         
-        if ($booking) {
-            $booking->updatePaymentStatus('Paid', [
-                'gateway' => 'Stripe',
-                'reference' => $paymentIntent->id,
-                'payment_intent_id' => $paymentIntent->id,
+        if (!$booking) {
+            $logger->warning('Webhook payment success: booking not found', [
+                'payment_intent_id' => $paymentIntent->id
             ]);
+            return false;
         }
+        
+        // REPLAY PROTECTION: Check if this event should be processed
+        if ($eventId && $eventTimestamp && !$booking->shouldProcessWebhookEvent($eventId, $eventTimestamp)) {
+            $logger->info('Webhook replay detected for payment success', [
+                'booking_code' => $booking->Code,
+                'event_id' => $eventId
+            ]);
+            return false;
+        }
+        
+        // Use centralized payment status method
+        $booking->markPaymentSuccessful($paymentIntent->id, $paymentIntent->id);
+        
+        // Mark event as processed
+        if ($eventId && $eventTimestamp) {
+            $booking->markWebhookProcessed($eventId, $eventTimestamp);
+        }
+        
+        $logger->info('Payment success processed via webhook', [
+            'booking_code' => $booking->Code,
+            'payment_intent_id' => $paymentIntent->id
+        ]);
+        
+        return true;
     }
     
     /**
      * Handle failed payment via webhook
      */
-    protected function handlePaymentFailure($paymentIntent)
+    protected function handlePaymentFailure($paymentIntent, string $eventId = '', int $eventTimestamp = 0): bool
     {
+        $logger = Injector::inst()->get(LoggerInterface::class);
+        
         $booking = Booking::get()
             ->filter('PaymentIntentId', $paymentIntent->id)
             ->first();
         
-        if ($booking) {
-            $booking->updatePaymentStatus('Failed', [
-                'gateway' => 'Stripe',
-                'reference' => $paymentIntent->id,
-                'payment_intent_id' => $paymentIntent->id,
+        if (!$booking) {
+            $logger->warning('Webhook payment failure: booking not found', [
+                'payment_intent_id' => $paymentIntent->id
             ]);
+            return false;
         }
+        
+        // REPLAY PROTECTION: Check if this event should be processed
+        if ($eventId && $eventTimestamp && !$booking->shouldProcessWebhookEvent($eventId, $eventTimestamp)) {
+            $logger->info('Webhook replay detected for payment failure', [
+                'booking_code' => $booking->Code,
+                'event_id' => $eventId
+            ]);
+            return false;
+        }
+        
+        // Use centralized payment status method
+        $booking->markPaymentFailed($paymentIntent->id, 'Payment failed via webhook');
+        
+        // Mark event as processed
+        if ($eventId && $eventTimestamp) {
+            $booking->markWebhookProcessed($eventId, $eventTimestamp);
+        }
+        
+        $logger->warning('Payment failure processed via webhook', [
+            'booking_code' => $booking->Code,
+            'payment_intent_id' => $paymentIntent->id
+        ]);
+        
+        return true;
     }
     
     /**
@@ -855,8 +928,15 @@ class TourBookingPageController extends PageController
     protected function getPaymentFromRequest($request)
     {
         $identifier = $request->param('Identifier');
+        if (!$identifier) {
+            $identifier = $request->getVar('identifier');
+        }
+        if (!$identifier) {
+            return null;
+        }
         return Payment::get()
             ->filter('Identifier', $identifier)
+            ->filter('Identifier:not', '')
             ->first();
     }
     

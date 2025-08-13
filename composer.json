@@ -26,7 +26,8 @@
     "sunnysideup/google-calendar-interface": "dev-master",
     "sunnysideup/email_reminder": "dev-master",
     "sunnysideup/yes-no-any-filter": "dev-master",
-    "sunnysideup/sanitise-class-name": "dev-master"
+    "sunnysideup/sanitise-class-name": "dev-master",
+    "stripe/stripe-php": "^14"
   },
   "autoload": {
     "psr-4": {

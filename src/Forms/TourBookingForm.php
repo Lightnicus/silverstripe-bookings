@@ -4,6 +4,7 @@ namespace Sunnysideup\Bookings\Forms;
 
 use SilverStripe\Control\Controller;
 use SilverStripe\Control\HTTPRequest;
+use SilverStripe\Core\Config\Config;
 use SilverStripe\Core\Convert;
 use SilverStripe\Core\Injector\Injector;
 use SilverStripe\Forms\CheckboxSetField;
@@ -23,6 +24,13 @@ use Sunnysideup\Bookings\Model\TourBookingSettings;
 use SilverStripe\Omnipay\Model\Payment;
 use SilverStripe\Omnipay\Service\ServiceFactory;
 use Exception;
+use Psr\Log\LoggerInterface;
+use Sunnysideup\Bookings\Model\PaymentConstants;
+use Sunnysideup\Bookings\Exceptions\PaymentValidationException;
+use Sunnysideup\Bookings\Exceptions\PaymentProcessingException;
+use Sunnysideup\Bookings\Exceptions\PaymentGatewayException;
+use SilverStripe\Core\Environment;
+use SilverStripe\View\Requirements;
 
 class TourBookingForm extends Form
 {
@@ -145,6 +153,76 @@ class TourBookingForm extends Form
                     $this->currentTour->ID
                 )
             );
+        }
+
+        // If payments are enabled, include Stripe Elements container and hidden token field
+        if (TourBookingSettings::inst()->EnablePayments) {
+            $column2->push(HiddenField::create('stripeToken', ''));
+            $column2->push(
+                LiteralField::create(
+                    'StripeCardElement',
+                    '<div class="field field--stripe">'
+                    . '<label>Pay by Credit Card</label>'
+                    . '<div id="card-element"></div>'
+                    . '<div id="card-errors" class="message bad" role="alert"></div>'
+                    . '</div>'
+                )
+            );
+            // Add minimal styles to make card UI stand out
+            Requirements::customCSS(
+                '.field--stripe{margin-top:20px;padding:18px;border:2px solid #111;border-radius:12px;background:#fff;box-shadow:0 6px 18px rgba(0,0,0,.06)}'
+                . '.field--stripe label{display:block;margin:0 0 10px;font-weight:700;letter-spacing:.02em}'
+                . '#card-element{padding:12px 14px;border:1px solid #d9d9d9;border-radius:8px;background:#fafafa}'
+                . '.StripeElement--focus{border-color:#d81b28;box-shadow:0 0 0 3px rgba(216,27,40,.15)}'
+                . '#card-errors{margin-top:10px;color:#d81b28;font-weight:600}',
+                'StripeElementsCSS'
+            );
+
+            // Load Stripe.js and boot minimal Elements integration
+            $pk = (string) (Environment::getEnv('STRIPE_PUBLISHABLE_KEY') ?: '');
+            if ($pk) {
+                // Use a direct script tag to avoid local requirement logging/caching
+                Requirements::insertHeadTags('<script src="https://js.stripe.com/v3/"></script>');
+                $formIdMain = 'Form_' . $this->FormName();
+                $formIdAlt = $this->FormName();
+                $boot = <<<JS
+                (function(){
+                  function init(){
+                    if (!window.Stripe) { return; }
+                    var stripe = Stripe("{$pk}");
+                    var elements = stripe.elements();
+                    var card = elements.create('card');
+                    var cardEl = document.getElementById('card-element');
+                    if (!cardEl) { return; }
+                    card.mount(cardEl);
+                    var form = document.getElementById('{$formIdMain}') || document.getElementById('{$formIdAlt}');
+                    if (!form) { return; }
+                    form.addEventListener('submit', function(e){
+                      var totalField = form.querySelector('[name="TotalNumberOfGuests"]');
+                      var needsPayment = true; // server still validates amount; keep UI simple
+                      if (!needsPayment) { return; }
+                      // Only intercept if token not already set (avoid loops)
+                      var tokenInput = form.querySelector('input[name="stripeToken"]');
+                      if (tokenInput && tokenInput.value) { return; }
+                      e.preventDefault();
+                      stripe.createToken(card).then(function(result){
+                        var errorEl = document.getElementById('card-errors');
+                        if (result.error) {
+                          if (errorEl) { errorEl.textContent = result.error.message; }
+                        } else {
+                          if (tokenInput) { tokenInput.value = result.token.id; }
+                          form.submit();
+                        }
+                      });
+                    });
+                  }
+                  if (document.readyState === 'loading') {
+                    document.addEventListener('DOMContentLoaded', init);
+                  } else { init(); }
+                })();
+                JS;
+                Requirements::customScript($boot, 'StripeElementsBoot');
+            }
         }
 
         $fieldList->push($column1);
@@ -435,44 +513,98 @@ class TourBookingForm extends Form
      */
     protected function processPayment(Booking $booking, array $data): array
     {
+        $logger = Injector::inst()->get(LoggerInterface::class);
+        
         try {
+            // Validation: Check payment amount
+            $paymentAmount = $booking->getPaymentAmount();
+            if (!$booking->validatePaymentAmount($paymentAmount)) {
+                throw new PaymentValidationException($booking->getAmountValidationError($paymentAmount));
+            }
+            
+            // Validation: Check payment token
+            if (!isset($data['stripeToken'])) {
+                throw new PaymentValidationException('Payment token not provided');
+            }
+            
+            // Get currency from configuration
+            $currency = $booking->getPaymentCurrency();
+            
+            // If amount due is zero, skip creating an Omnipay payment entirely
+            if ($paymentAmount <= 0) {
+                return ['success' => true];
+            }
+
             // Create payment via SilverStripe Omnipay
             $payment = Payment::create()
-                ->init('Stripe', $booking->getPaymentAmount(), 'NZD')
+                ->init(PaymentConstants::GATEWAY_STRIPE, $paymentAmount, $currency)
                 ->setSuccessUrl($this->controller->Link('paymentcallback/complete'))
                 ->setFailureUrl($this->controller->Link('paymentcallback/failure'));
-            
+
+            $payment->write();
+
+            // Ensure callbacks can load the Payment by identifier (support query param based callbacks)
+            $success = Controller::join_links($this->controller->Link('paymentcallback'), 'complete') . '?identifier=' . urlencode($payment->Identifier);
+            $failure = Controller::join_links($this->controller->Link('paymentcallback'), 'failure') . '?identifier=' . urlencode($payment->Identifier);
+            $payment->setSuccessUrl($success);
+            $payment->setFailureUrl($failure);
             $payment->write();
             
             // Process payment with Stripe token
-            if (isset($data['stripeToken'])) {
-                $service = ServiceFactory::create()->getService($payment, ServiceFactory::INTENT_PURCHASE);
-                $response = $service->initiate([
-                    'token' => $data['stripeToken'],
-                    'description' => 'Booking: ' . $booking->Code,
-                ]);
-                
-                if ($response->isSuccessful()) {
-                    // Immediate confirmation
-                    $booking->updatePaymentStatus('Paid', [
-                        'gateway' => 'Stripe',
-                        'reference' => $response->getTransactionReference(),
-                        'payment_intent_id' => $response->getPaymentIntentReference(),
-                    ]);
-                    return ['success' => true];
-                } elseif ($response->isRedirect()) {
-                    // 3D Secure required - store payment intent ID
-                    $booking->PaymentIntentId = $response->getPaymentIntentReference();
-                    $booking->write();
-                    return ['success' => true, 'redirect' => $response->getRedirectUrl()];
-                } else {
-                    return ['success' => false, 'message' => 'Payment failed: ' . $response->getMessage()];
-                }
+            $service = ServiceFactory::create()->getService($payment, ServiceFactory::INTENT_PURCHASE);
+            $response = $service->initiate([
+                'token' => $data['stripeToken'],
+                'description' => 'Booking: ' . $booking->Code,
+            ]);
+            
+            if ($response->isSuccessful()) {
+                // Use centralized payment status method
+                $booking->markPaymentSuccessful(
+                    $response->getTransactionReference(),
+                    $response->getPaymentIntentReference()
+                );
+                return ['success' => true];
+            } elseif ($response->isRedirect()) {
+                // 3D Secure required - store payment intent ID
+                $booking->PaymentIntentId = $response->getPaymentIntentReference();
+                $booking->write();
+                return ['success' => true, 'redirect' => $response->getRedirectUrl()];
             } else {
-                return ['success' => false, 'message' => 'Payment token not provided'];
+                throw new PaymentProcessingException('Payment failed: ' . $response->getMessage());
             }
+            
+        } catch (PaymentValidationException $e) {
+            $logger->warning('Payment validation error for booking ' . $booking->Code, [
+                'booking_id' => $booking->ID,
+                'error' => $e->getAdminMessage()
+            ]);
+            return ['success' => false, 'message' => $e->getUserMessage()];
+            
+        } catch (PaymentGatewayException $e) {
+            $logger->error('Payment gateway error for booking ' . $booking->Code, [
+                'booking_id' => $booking->ID,
+                'error' => $e->getAdminMessage()
+            ]);
+            return ['success' => false, 'message' => $e->getUserMessage()];
+            
+        } catch (PaymentProcessingException $e) {
+            $logger->error('Payment processing error for booking ' . $booking->Code, [
+                'booking_id' => $booking->ID,
+                'error' => $e->getAdminMessage()
+            ]);
+            return ['success' => false, 'message' => $e->getUserMessage()];
+            
         } catch (Exception $e) {
-            return ['success' => false, 'message' => 'Payment error: ' . $e->getMessage()];
+            // Catch-all for unexpected errors - log but don't expose details
+            $logger->critical('Unexpected payment error for booking ' . $booking->Code, [
+                'booking_id' => $booking->ID,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            return [
+                'success' => false, 
+                'message' => 'An unexpected error occurred. Support has been notified. Please try again or contact us directly.'
+            ];
         }
     }
 }

@@ -38,6 +38,8 @@ use SunnySideUp\EmailReminder\Model\EmailReminderNotificationSchedule;
  * @property string $PaymentReference
  * @property string $PaymentDate
  * @property string $PaymentIntentId
+ * @property int $LastWebhookTimestamp
+ * @property string $LastWebhookEventId
  * @property string $Code
  * @property string $Date
  * @property int $TotalNumberOfGuests
@@ -137,7 +139,6 @@ class Booking extends TourBaseClass
         'InitiatingFirstName',
         'InitiatingEmail',
         'PeanutAllergyConfirmation',
-        'ReferralOptions',
     ];
 
     private static $searchable_fields = [

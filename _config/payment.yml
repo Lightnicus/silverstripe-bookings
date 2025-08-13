@@ -1,0 +1,16 @@
+---
+Name: bookings-payment-config
+---
+# Booking Payment Configuration
+BookingPaymentSettings:
+  # Payment currency - NZD only for this implementation
+  currency: 'NZD'
+  
+  # Payment timeout in minutes
+  timeout_minutes: 15
+  
+  # Maximum payment retry attempts
+  max_retry_attempts: 3
+  
+  # Enable payment amount validation
+  validate_amounts: true
