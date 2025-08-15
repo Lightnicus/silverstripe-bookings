@@ -168,15 +168,16 @@ class TourBookingForm extends Form
                     . '</div>'
                 )
             );
-            // Add minimal styles to make card UI stand out
-            Requirements::customCSS(
-                '.field--stripe{margin-top:20px;padding:18px;border:2px solid #111;border-radius:12px;background:#fff;box-shadow:0 6px 18px rgba(0,0,0,.06)}'
-                . '.field--stripe label{display:block;margin:0 0 10px;font-weight:700;letter-spacing:.02em}'
-                . '#card-element{padding:12px 14px;border:1px solid #d9d9d9;border-radius:8px;background:#fafafa}'
-                . '.StripeElement--focus{border-color:#d81b28;box-shadow:0 0 0 3px rgba(216,27,40,.15)}'
-                . '#card-errors{margin-top:10px;color:#d81b28;font-weight:600}',
-                'StripeElementsCSS'
-            );
+                         // Add minimal styles to make card UI stand out
+             Requirements::customCSS(
+                 '.field--stripe{margin-top:20px;padding:18px;border:2px solid #111;border-radius:12px;background:#fff;box-shadow:0 6px 18px rgba(0,0,0,.06)}'
+                 . '.field--stripe label{display:block;margin:0 0 10px;font-weight:700;letter-spacing:.02em}'
+                 . '#card-element{padding:12px 14px;border:1px solid #d9d9d9;border-radius:8px;background:#fafafa}'
+                 . '.StripeElement--focus{border-color:#d81b28;box-shadow:0 0 0 3px rgba(216,27,40,.15)}'
+                 . '#card-errors{margin-top:10px;color:#d81b28;font-weight:600;padding:8px 12px;background:#fff3f3;border:1px solid #ffcdd2;border-radius:4px;display:none}'
+                 . '#card-errors:not(:empty){display:block}',
+                 'StripeElementsCSS'
+             );
 
             // Load Stripe.js and boot minimal Elements integration
             $pk = (string) (Environment::getEnv('STRIPE_PUBLISHABLE_KEY') ?: '');
@@ -195,22 +196,76 @@ class TourBookingForm extends Form
                     var cardEl = document.getElementById('card-element');
                     if (!cardEl) { return; }
                     card.mount(cardEl);
+                    
+                    // Track card completion status
+                    var cardComplete = false;
+                    card.on('change', function(event) {
+                        cardComplete = event.complete;
+                        var errorEl = document.getElementById('card-errors');
+                        if (errorEl && event.error) {
+                            errorEl.textContent = event.error.message;
+                            errorEl.style.display = 'block';
+                        } else if (errorEl && cardComplete) {
+                            errorEl.textContent = '';
+                            errorEl.style.display = 'none';
+                        }
+                    });
                     var form = document.getElementById('{$formIdMain}') || document.getElementById('{$formIdAlt}');
                     if (!form) { return; }
                     form.addEventListener('submit', function(e){
-                      var totalField = form.querySelector('[name="TotalNumberOfGuests"]');
-                      var needsPayment = true; // server still validates amount; keep UI simple
-                      if (!needsPayment) { return; }
-                      // Only intercept if token not already set (avoid loops)
+                      // Check if payment is required by looking for payment-related fields
+                      var cardElement = document.getElementById('card-element');
                       var tokenInput = form.querySelector('input[name="stripeToken"]');
+                      var stripeField = document.querySelector('.field--stripe');
+                      var needsPayment = cardElement && stripeField && stripeField.style.display !== 'none' && cardElement.parentNode.style.display !== 'none';
+                      
+                      // If payment element is not present, let the form submit normally
+                      if (!needsPayment) { return; }
+                      
+                      // If token is already set, let the form submit normally (avoid loops)
                       if (tokenInput && tokenInput.value) { return; }
+                      
+                      // Prevent form submission to handle payment processing
                       e.preventDefault();
+                      
+                      // Clear any previous errors
+                      var errorEl = document.getElementById('card-errors');
+                      if (errorEl) { 
+                        errorEl.textContent = ''; 
+                        errorEl.style.display = 'none';
+                      }
+                      
+                      // Create Stripe token
                       stripe.createToken(card).then(function(result){
-                        var errorEl = document.getElementById('card-errors');
                         if (result.error) {
-                          if (errorEl) { errorEl.textContent = result.error.message; }
+                          if (errorEl) { 
+                            errorEl.textContent = result.error.message; 
+                            errorEl.style.display = 'block';
+                          }
+                          // Show validation error in the payment section
+                          var paymentSection = document.querySelector('.payment-section');
+                          if (paymentSection) {
+                            paymentSection.classList.add('validation-error');
+                            var existingError = paymentSection.querySelector('.payment-validation-error');
+                            if (!existingError) {
+                              var errorMessage = document.createElement('div');
+                              errorMessage.className = 'payment-validation-error validation-error';
+                              errorMessage.style.cssText = 'color: #dc3545; font-size: 14px; margin-top: 8px; margin-bottom: 0; font-weight: 500; clear: both; display: block;';
+                              errorMessage.textContent = 'Please complete your payment details to continue.';
+                              paymentSection.appendChild(errorMessage);
+                            }
+                          }
                         } else {
                           if (tokenInput) { tokenInput.value = result.token.id; }
+                          // Remove any validation errors
+                          var paymentSection = document.querySelector('.payment-section');
+                          if (paymentSection) {
+                            paymentSection.classList.remove('validation-error');
+                            var existingError = paymentSection.querySelector('.payment-validation-error');
+                            if (existingError) {
+                              existingError.remove();
+                            }
+                          }
                           form.submit();
                         }
                       });
@@ -523,8 +578,8 @@ class TourBookingForm extends Form
             }
             
             // Validation: Check payment token
-            if (!isset($data['stripeToken'])) {
-                throw new PaymentValidationException('Payment token not provided');
+            if (!isset($data['stripeToken']) || empty($data['stripeToken'])) {
+                throw new PaymentValidationException('Please enter your payment details to complete the booking.');
             }
             
             // Get currency from configuration
@@ -603,7 +658,7 @@ class TourBookingForm extends Form
             ]);
             return [
                 'success' => false, 
-                'message' => 'An unexpected error occurred. Support has been notified. Please try again or contact us directly.'
+                'message' => 'Payment processing failed. Please check your payment details and try again.'
             ];
         }
     }
