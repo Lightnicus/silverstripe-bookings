@@ -8,6 +8,7 @@ use SilverStripe\Admin\ModelAdmin;
 use SilverStripe\Forms\GridField\GridField;
 use SilverStripe\Forms\GridField\GridFieldAddNewButton;
 use SilverStripe\Forms\GridField\GridFieldConfig_RecordEditor;
+use SilverStripe\Forms\GridField\GridFieldDataColumns;
 use SilverStripe\Forms\GridField\GridFieldPaginator;
 use SilverStripe\Forms\LiteralField;
 use SilverStripe\Forms\Tab;
@@ -19,6 +20,7 @@ use Sunnysideup\Bookings\Model\Booking;
 use Sunnysideup\Bookings\Model\Tour;
 use Sunnysideup\Bookings\Model\TourBookingSettings;
 use Sunnysideup\Bookings\Model\Waitlister;
+use Sunnysideup\Bookings\Cms\TourBookingsConfig;
 
 /**
  * Class \Sunnysideup\Bookings\Cms\TourBookingsAdmin
@@ -69,15 +71,7 @@ class TourBookingsAdmin extends ModelAdmin
             $list = $list->filter(['TourID' => $tourIds]);
         }
 
-        // Only show payment columns if payments are enabled
-        if (TourBookingsConfig::is_model_class($this->modelClass, Booking::class) && TourBookingSettings::inst()->EnablePayments) {
-            $list = $list->addFields([
-                'PaymentStatus',
-                'PaymentAmount',
-                'PaymentDate',
-                'PaymentReference',
-            ]);
-        }
+
 
         return $list;
     }
@@ -91,6 +85,30 @@ class TourBookingsAdmin extends ModelAdmin
     public function getEditForm($id = null, $fields = null)
     {
         $form = parent::getEditForm($id, $fields);
+        
+        // Add payment columns to Booking GridField if payments are enabled
+        if (TourBookingsConfig::is_model_class($this->modelClass, Booking::class) && TourBookingSettings::inst()->EnablePayments) {
+            $fields = $form->Fields();
+            $gridField = $fields->dataFieldByName($this->sanitiseClassName($this->modelClass));
+            
+            if ($gridField && $gridField instanceof GridField) {
+                $gridFieldConfig = $gridField->getConfig();
+                $dataColumns = $gridFieldConfig->getComponentByType(GridFieldDataColumns::class);
+                
+                if ($dataColumns) {
+                    $displayFields = $dataColumns->getDisplayFields($gridField);
+                    
+                    // Add payment fields to display
+                    $displayFields['PaymentStatus'] = 'Payment Status';
+                    $displayFields['PaymentAmount'] = 'Payment Amount';
+                    $displayFields['PaymentDate'] = 'Payment Date';
+                    $displayFields['PaymentReference'] = 'Payment Reference';
+                    
+                    $dataColumns->setDisplayFields($displayFields);
+                }
+            }
+        }
+        
         if (TourBookingsConfig::is_model_class($this->modelClass, Tour::class)) {
             $fields = $form->Fields();
             $gridField = $fields->dataFieldByName($this->sanitiseClassName($this->modelClass));
