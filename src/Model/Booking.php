@@ -33,7 +33,6 @@ use SunnySideUp\EmailReminder\Model\EmailReminderNotificationSchedule;
  * Class \Sunnysideup\Bookings\Model\Booking
  *
  * @property string $PaymentStatus
- * @property string $PaymentAmount
  * @property string $PaymentGateway
  * @property string $PaymentReference
  * @property string $PaymentDate

@@ -5,6 +5,10 @@ After: framework/*, cms/*
 Sunnysideup\Bookings\Model\Booking:
   extensions:
     - Sunnysideup\Bookings\Extensions\BookingPaymentExtension
+
+SilverStripe\Omnipay\Model\Payment:
+  extensions:
+    - Sunnysideup\Bookings\Extensions\PaymentExtension
     
 Sunnysideup\Bookings\Forms\TourBookingForm:
   extensions:

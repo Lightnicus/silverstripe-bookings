@@ -12,7 +12,6 @@ use Sunnysideup\Bookings\Model\PaymentConstants;
  *
  * @property Booking|BookingPaymentExtension $owner
  * @property string $PaymentStatus
- * @property string $PaymentAmount
  * @property string $PaymentGateway
  * @property string $PaymentReference
  * @property string $PaymentDate
@@ -25,7 +24,6 @@ class BookingPaymentExtension extends DataExtension
 {
     private static $db = [
         'PaymentStatus' => "Enum('Pending,Paid,Failed,Refunded,Cancelled','Pending')",
-        'PaymentAmount' => 'Money',
         'PaymentGateway' => 'Varchar(50)',
         'PaymentReference' => 'Varchar(255)',
         'PaymentDate' => 'Datetime',

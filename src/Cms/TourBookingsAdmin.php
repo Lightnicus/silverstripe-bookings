@@ -100,7 +100,7 @@ class TourBookingsAdmin extends ModelAdmin
                     
                     // Add payment fields to display
                     $displayFields['PaymentStatus'] = 'Payment Status';
-                    $displayFields['PaymentAmount'] = 'Payment Amount';
+                    $displayFields['getPaymentAmount'] = 'Payment Amount';
                     $displayFields['PaymentDate'] = 'Payment Date';
                     $displayFields['PaymentReference'] = 'Payment Reference';
                     
