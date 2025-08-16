@@ -162,11 +162,11 @@ class BookingPaymentExtension extends DataExtension
     /**
      * Mark payment as successful with consistent data structure
      * 
-     * @param string $transactionReference Payment gateway reference
-     * @param string $paymentIntentId Stripe payment intent ID
+     * @param string|null $transactionReference Payment gateway reference
+     * @param string|null $paymentIntentId Stripe payment intent ID
      * @param array $additionalData Any additional payment data
      */
-    public function markPaymentSuccessful(string $transactionReference, string $paymentIntentId = '', array $additionalData = []): void
+    public function markPaymentSuccessful(?string $transactionReference, ?string $paymentIntentId = null, array $additionalData = []): void
     {
         $paymentData = array_merge([
             'gateway' => PaymentConstants::GATEWAY_STRIPE,
@@ -180,11 +180,11 @@ class BookingPaymentExtension extends DataExtension
     /**
      * Mark payment as failed with consistent data structure
      * 
-     * @param string $transactionReference Payment gateway reference
-     * @param string $errorMessage Optional error message
+     * @param string|null $transactionReference Payment gateway reference
+     * @param string|null $errorMessage Optional error message
      * @param array $additionalData Any additional payment data
      */
-    public function markPaymentFailed(string $transactionReference, string $errorMessage = '', array $additionalData = []): void
+    public function markPaymentFailed(?string $transactionReference, ?string $errorMessage = null, array $additionalData = []): void
     {
         $paymentData = array_merge([
             'gateway' => PaymentConstants::GATEWAY_STRIPE,

@@ -11,6 +11,7 @@ use SilverStripe\Forms\DropdownField;
 use SilverStripe\Forms\EmailField;
 use SilverStripe\Forms\GridField\GridField;
 use SilverStripe\Forms\GridField\GridFieldConfig_RecordViewer;
+use SilverStripe\Forms\GridField\GridFieldDataColumns;
 use SilverStripe\Forms\HeaderField;
 use SilverStripe\Forms\HiddenField;
 use SilverStripe\Forms\LiteralField;
@@ -694,12 +695,7 @@ class Booking extends TourBaseClass
                     'Selected Ticket Types',
                     2
                 ),
-                GridField::create(
-                    'TicketTypes',
-                    'Ticket Types',
-                    $this->TicketTypes(),
-                    GridFieldConfig_RecordViewer::create()
-                ),
+                $this->createTicketTypesGridField(),
                 ReadonlyField::create(
                     'TicketTypesSummary',
                     'Summary',
@@ -1186,5 +1182,56 @@ class Booking extends TourBaseClass
         }
 
         return implode(', ', $summary);
+    }
+
+    /**
+     * Create a custom GridField for ticket types that shows booking-specific quantities
+     * 
+     * @return GridField
+     */
+    protected function createTicketTypesGridField(): GridField
+    {
+        $gridField = GridField::create(
+            'TicketTypes',
+            'Ticket Types',
+            $this->TicketTypes(),
+            GridFieldConfig_RecordViewer::create()
+        );
+
+        // Get the data columns component and modify the display fields
+        $dataColumns = $gridField->getConfig()->getComponentByType(GridFieldDataColumns::class);
+        
+        if ($dataColumns) {
+            // Get current display fields (from summary_fields)
+            $displayFields = $dataColumns->getDisplayFields($gridField);
+            
+            // Replace 'TotalQuantitySold' with booking-specific quantity
+            if (isset($displayFields['TotalQuantitySold'])) {
+                unset($displayFields['TotalQuantitySold']);
+                $displayFields['BookingQuantity'] = 'Quantity Sold';
+            }
+            
+            // Remove 'TotalRevenueFormatted' as it's not relevant for a single booking
+            if (isset($displayFields['TotalRevenueFormatted'])) {
+                unset($displayFields['TotalRevenueFormatted']);
+            }
+            
+            $dataColumns->setDisplayFields($displayFields);
+            
+            // Add custom field formatting for booking-specific quantity
+            $dataColumns->setFieldFormatting([
+                'BookingQuantity' => function ($value, $item) {
+                    if ($item instanceof TicketType) {
+                        // Get the quantity for this ticket type in this specific booking
+                        $quantity = $this->TicketTypes()->getExtraData('Quantity', $item->ID);
+                        $quantity = is_array($quantity) ? (int)($quantity['Quantity'] ?? 0) : (int)$quantity;
+                        return $quantity;
+                    }
+                    return 0;
+                }
+            ]);
+        }
+
+        return $gridField;
     }
 }
