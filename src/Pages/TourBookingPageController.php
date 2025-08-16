@@ -756,15 +756,17 @@ class TourBookingPageController extends PageController
             // Update booking status using centralized method
             $booking = $this->getBookingFromPayment($payment);
             if ($booking) {
-                $booking->markPaymentSuccessful(
-                    $response->getTransactionReference(),
-                    $response->getPaymentIntentReference()
-                );
+                // Get references from underlying Omnipay response
+                $omnipayResponse = $response->getOmnipayResponse();
+                $transactionRef = $omnipayResponse && method_exists($omnipayResponse, 'getTransactionReference') ? $omnipayResponse->getTransactionReference() : null;
+                $paymentIntentRef = $omnipayResponse && method_exists($omnipayResponse, 'getPaymentIntentReference') ? $omnipayResponse->getPaymentIntentReference() : null;
+                
+                $booking->markPaymentSuccessful($transactionRef, $paymentIntentRef);
                 PaymentLogger::info('payment.callback.success', [
                     'bookingID' => $booking->ID,
                     'bookingCode' => $booking->Code,
-                    'transactionReference' => $response->getTransactionReference(),
-                    'paymentIntentReference' => $response->getPaymentIntentReference(),
+                    'transactionReference' => $transactionRef,
+                    'paymentIntentReference' => $paymentIntentRef,
                 ]);
             }
 
@@ -773,15 +775,17 @@ class TourBookingPageController extends PageController
             // Update booking status to failed using centralized method
             $booking = $this->getBookingFromPayment($payment);
             if ($booking) {
-                $booking->markPaymentFailed(
-                    $response->getTransactionReference(),
-                    $response->getMessage()
-                );
+                // Get references from underlying Omnipay response
+                $omnipayResponse = $response->getOmnipayResponse();
+                $transactionRef = $omnipayResponse && method_exists($omnipayResponse, 'getTransactionReference') ? $omnipayResponse->getTransactionReference() : null;
+                $message = $omnipayResponse && method_exists($omnipayResponse, 'getMessage') ? $omnipayResponse->getMessage() : 'Payment failed';
+                
+                $booking->markPaymentFailed($transactionRef, $message);
                 PaymentLogger::error('payment.callback.fail', [
                     'bookingID' => $booking->ID,
                     'bookingCode' => $booking->Code,
-                    'transactionReference' => $response->getTransactionReference(),
-                    'message' => $response->getMessage(),
+                    'transactionReference' => $transactionRef,
+                    'message' => $message,
                 ]);
             }
 

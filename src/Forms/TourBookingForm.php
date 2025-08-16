@@ -550,7 +550,7 @@ class TourBookingForm extends Form
         PaymentLogger::info('booking.saved', [
             'bookingID' => $this->currentBooking->ID,
             'bookingCode' => $this->currentBooking->Code,
-            'totalGuests' => $this->currentBooking->TotalNumberOfGuests,
+            'totalGuests' => (int) $this->currentBooking->getField('TotalNumberOfGuests'),
         ]);
         //$this->currentBooking->Tour()->write();
         $code = substr((string) $this->currentBooking->Code, 0, 9);
@@ -688,32 +688,40 @@ class TourBookingForm extends Form
             ]);
             
             if ($response->isSuccessful()) {
+                // Get transaction reference from underlying Omnipay response
+                $omnipayResponse = $response->getOmnipayResponse();
+                $transactionRef = $omnipayResponse && method_exists($omnipayResponse, 'getTransactionReference') ? $omnipayResponse->getTransactionReference() : null;
+                $paymentIntentRef = $omnipayResponse && method_exists($omnipayResponse, 'getPaymentIntentReference') ? $omnipayResponse->getPaymentIntentReference() : null;
+                
                 PaymentLogger::info('payment.gateway.success', [
                     'paymentID' => $payment->ID,
-                    'transactionReference' => $response->getTransactionReference(),
-                    'paymentIntentReference' => method_exists($response, 'getPaymentIntentReference') ? $response->getPaymentIntentReference() : null,
+                    'transactionReference' => $transactionRef,
+                    'paymentIntentReference' => $paymentIntentRef,
                 ]);
                 // Use centralized payment status method
-                $booking->markPaymentSuccessful(
-                    $response->getTransactionReference(),
-                    $response->getPaymentIntentReference()
-                );
+                $booking->markPaymentSuccessful($transactionRef, $paymentIntentRef);
                 return ['success' => true];
             } elseif ($response->isRedirect()) {
+                // Get payment intent reference from underlying Omnipay response
+                $omnipayResponse = $response->getOmnipayResponse();
+                $paymentIntentRef = $omnipayResponse && method_exists($omnipayResponse, 'getPaymentIntentReference') ? $omnipayResponse->getPaymentIntentReference() : null;
+                
                 PaymentLogger::info('payment.gateway.redirect', [
                     'paymentID' => $payment->ID,
-                    'paymentIntentReference' => method_exists($response, 'getPaymentIntentReference') ? $response->getPaymentIntentReference() : null,
+                    'paymentIntentReference' => $paymentIntentRef,
                 ]);
                 // 3D Secure required - store payment intent ID
-                $booking->PaymentIntentId = $response->getPaymentIntentReference();
+                $booking->PaymentIntentId = $paymentIntentRef;
                 $booking->write();
                 return ['success' => true, 'redirect' => $response->getRedirectUrl()];
             } else {
+                $omni = method_exists($response, 'getOmnipayResponse') ? $response->getOmnipayResponse() : null;
+                $msg = ($omni && method_exists($omni, 'getMessage')) ? (string) $omni->getMessage() : 'Unknown gateway error';
                 PaymentLogger::error('payment.gateway.error', [
                     'paymentID' => $payment->ID,
-                    'message' => $response->getMessage(),
+                    'message' => $msg,
                 ]);
-                throw new PaymentProcessingException('Payment failed: ' . $response->getMessage());
+                throw new PaymentProcessingException('Payment failed: ' . $msg);
             }
             
         } catch (PaymentValidationException $e) {
