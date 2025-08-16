@@ -30,6 +30,7 @@ use SilverStripe\Core\Environment;
 use Psr\Log\LoggerInterface;
 use Sunnysideup\Bookings\Model\PaymentConstants;
 use Exception;
+use Sunnysideup\Bookings\Logging\PaymentLogger;
 
 /**
  * Class \Sunnysideup\Bookings\Pages\TourBookingPageController
@@ -732,10 +733,18 @@ class TourBookingPageController extends PageController
      */
     public function paymentcallback($request)
     {
+        PaymentLogger::info('payment.callback.start', [
+            'route' => 'paymentcallback',
+            'statusParam' => $request->param('Status'),
+            'identifier' => $request->param('Identifier') ?: $request->getVar('identifier'),
+        ]);
         $status = $request->param('Status');
         $payment = $this->getPaymentFromRequest($request);
 
         if (!$payment) {
+            PaymentLogger::error('payment.callback.error', [
+                'reason' => 'payment_not_found',
+            ]);
             return $this->httpError(404, 'Payment not found');
         }
 
@@ -751,6 +760,12 @@ class TourBookingPageController extends PageController
                     $response->getTransactionReference(),
                     $response->getPaymentIntentReference()
                 );
+                PaymentLogger::info('payment.callback.success', [
+                    'bookingID' => $booking->ID,
+                    'bookingCode' => $booking->Code,
+                    'transactionReference' => $response->getTransactionReference(),
+                    'paymentIntentReference' => $response->getPaymentIntentReference(),
+                ]);
             }
 
             return $this->redirect($this->Link('paymentsuccess'));
@@ -762,6 +777,12 @@ class TourBookingPageController extends PageController
                     $response->getTransactionReference(),
                     $response->getMessage()
                 );
+                PaymentLogger::error('payment.callback.fail', [
+                    'bookingID' => $booking->ID,
+                    'bookingCode' => $booking->Code,
+                    'transactionReference' => $response->getTransactionReference(),
+                    'message' => $response->getMessage(),
+                ]);
             }
 
             return $this->redirect($this->Link('paymentfailure'));
@@ -773,6 +794,9 @@ class TourBookingPageController extends PageController
      */
     public function paymentwebhook($request)
     {
+        PaymentLogger::info('payment.webhook.start', [
+            'route' => 'payment-webhook',
+        ]);
         $logger = Injector::inst()->get(LoggerInterface::class);
 
         // Test mode - accessible via browser with ?test=1
@@ -808,9 +832,15 @@ class TourBookingPageController extends PageController
                 $event = \Stripe\Webhook::constructEvent($payload, $sigHeader, $endpointSecret);
             } catch(\UnexpectedValueException $e) {
                 $logger->warning('Invalid webhook payload received', ['error' => $e->getMessage()]);
+                PaymentLogger::error('payment.webhook.invalid_payload', [
+                    'message' => $e->getMessage(),
+                ]);
                 return $this->httpError(400, 'Invalid payload');
             } catch(\Stripe\Exception\SignatureVerificationException $e) {
                 $logger->warning('Invalid webhook signature received', ['error' => $e->getMessage()]);
+                PaymentLogger::error('payment.webhook.invalid_signature', [
+                    'message' => $e->getMessage(),
+                ]);
                 return $this->httpError(400, 'Invalid signature');
             }
 
@@ -818,8 +848,10 @@ class TourBookingPageController extends PageController
             $result = $this->processWebhookEvent($event);
 
             if ($result) {
+                PaymentLogger::info('payment.webhook.ok');
                 return new HTTPResponse('OK', 200);
             } else {
+                PaymentLogger::error('payment.webhook.process_failed');
                 return $this->httpError(400, 'Event processing failed');
             }
 
@@ -827,6 +859,9 @@ class TourBookingPageController extends PageController
             $logger->critical('Unexpected webhook error', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
+            ]);
+            PaymentLogger::error('payment.webhook.exception', [
+                'message' => $e->getMessage(),
             ]);
             return $this->httpError(500, 'Internal server error');
         }
@@ -841,14 +876,19 @@ class TourBookingPageController extends PageController
         switch ($event->type) {
             case 'payment_intent.succeeded':
                 $paymentIntent = $event->data->object;
-                return $this->handlePaymentSuccess($paymentIntent, $event->id, $event->created);
+                $ok = $this->handlePaymentSuccess($paymentIntent, $event->id, $event->created);
+                if ($ok) { PaymentLogger::info('payment.webhook.succeeded', ['payment_intent_id' => $paymentIntent->id ?? null]); }
+                return $ok;
             case 'payment_intent.payment_failed':
                 $paymentIntent = $event->data->object;
-                return $this->handlePaymentFailure($paymentIntent, $event->id, $event->created);
+                $ok = $this->handlePaymentFailure($paymentIntent, $event->id, $event->created);
+                if ($ok) { PaymentLogger::error('payment.webhook.failed', ['payment_intent_id' => $paymentIntent->id ?? null]); }
+                return $ok;
             default:
                 // Log unexpected event type but don't fail
                 $logger = Injector::inst()->get(LoggerInterface::class);
                 $logger->info('Unexpected webhook event type received: ' . $event->type);
+                PaymentLogger::error('payment.webhook.unhandled_type', [ 'type' => $event->type ?? null ]);
                 return true;
         }
     }

@@ -1,0 +1,8 @@
+---
+Name: bookings-payment-logging
+After: '#coreconfig'
+---
+Sunnysideup\Bookings\Logging\PaymentLogger:
+  enabled: false
+
+

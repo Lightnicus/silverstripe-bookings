@@ -31,6 +31,7 @@ use Sunnysideup\Bookings\Exceptions\PaymentProcessingException;
 use Sunnysideup\Bookings\Exceptions\PaymentGatewayException;
 use SilverStripe\Core\Environment;
 use SilverStripe\View\Requirements;
+use Sunnysideup\Bookings\Logging\PaymentLogger;
 
 class TourBookingForm extends Form
 {
@@ -313,6 +314,11 @@ class TourBookingForm extends Form
      */
     public function dobooking(array $data, Form $form, HTTPRequest $request)
     {
+        PaymentLogger::info('booking.submit', [
+            'route' => 'dobooking',
+            'bookingCode' => $this->currentBooking ? $this->currentBooking->Code : null,
+            'data_keys' => array_keys($data ?? []),
+        ]);
         $newBooking = true;
         $this->saveDataToSession();
         $data = Convert::raw2sql($data);
@@ -321,6 +327,10 @@ class TourBookingForm extends Form
             $selectedTour = Tour::get_by_id($data['TourID']);
 
             if ($selectedTour && !$selectedTour->getAllowBooking()) {
+                PaymentLogger::error('booking.validation.fail', [
+                    'reason' => 'tour_not_accepting_bookings',
+                    'tourID' => $selectedTour ? $selectedTour->ID : null,
+                ]);
                 $this->sessionError(
                     'Sorry, the tour is no-longer accepting booking at the selected time. Please book a tour at a different time.',
                     'bad'
@@ -368,12 +378,18 @@ class TourBookingForm extends Form
             
             // Validate: No children without adults
             if ($totalKids > 0 && $totalAdults === 0) {
+                PaymentLogger::error('booking.validation.fail', [
+                    'reason' => 'kids_without_adults',
+                ]);
                 $this->sessionError('Children must be with an adult.', 'bad');
                 return $this->controller->redirectBack();
             }
             
             // Validate: At least one spot selected
             if ($totalGuests === 0) {
+                PaymentLogger::error('booking.validation.fail', [
+                    'reason' => 'no_tickets_selected',
+                ]);
                 $this->sessionError('Please select at least one ticket.', 'bad');
                 return $this->controller->redirectBack();
             }
@@ -391,6 +407,11 @@ class TourBookingForm extends Form
                     $message = 'Sorry there are only ' . $spacesLeft . ' spaces';
                 } elseif ($spacesLeft === 1) {
                 }
+                PaymentLogger::error('booking.validation.fail', [
+                    'reason' => 'not_enough_spaces',
+                    'spacesLeft' => $spacesLeft,
+                    'totalGuests' => $totalGuests,
+                ]);
                 $this->sessionError(
                     $message . ' left. Please reduce the number of people for your booking or book a tour at a different time.',
                     'bad'
@@ -402,6 +423,10 @@ class TourBookingForm extends Form
         
         // Guest validations for unsaved objects (moved from Booking->validate())
         if ($totalGuests < 1) {
+            PaymentLogger::error('booking.validation.fail', [
+                'reason' => 'no_adult_attending',
+                'totalKids' => $totalKids,
+            ]);
             $this->sessionError(
                 'You need to have at least one person attending to make a booking.',
                 'bad'
@@ -433,6 +458,9 @@ class TourBookingForm extends Form
         
         // Validate peanut allergy confirmation
         if (!isset($data['PeanutAllergyConfirmation']) || !(bool) $data['PeanutAllergyConfirmation']) {
+            PaymentLogger::error('booking.validation.fail', [
+                'reason' => 'peanut_allergy_not_confirmed',
+            ]);
             $this->sessionError(
                 'You must confirm that no one in your group is allergic to peanuts.',
                 'bad'
@@ -442,6 +470,9 @@ class TourBookingForm extends Form
         
         // Validate referral options
         if (!isset($data['ReferralOptions']) || empty($data['ReferralOptions'])) {
+            PaymentLogger::error('booking.validation.fail', [
+                'reason' => 'no_referral_options',
+            ]);
             $this->sessionError(
                 'Please select how you heard about our tours.',
                 'bad'
@@ -456,6 +487,9 @@ class TourBookingForm extends Form
             } else {
                 $settings = TourBookingSettings::inst();
                 $email = $settings->Administrator()->Email;
+                PaymentLogger::error('booking.update.fail', [
+                    'reason' => 'confirming_email_mismatch',
+                ]);
                 $this->sessionError(
                     'You need to enter the same email address used to create the original booking, please try again or contact the tour manager for assistance: ' . $email,
                     'bad'
@@ -513,14 +547,30 @@ class TourBookingForm extends Form
             $this->currentBooking->ReferralText = $data['ReferralText'];
         }
         $this->currentBooking->write();
+        PaymentLogger::info('booking.saved', [
+            'bookingID' => $this->currentBooking->ID,
+            'bookingCode' => $this->currentBooking->Code,
+            'totalGuests' => $this->currentBooking->TotalNumberOfGuests,
+        ]);
         //$this->currentBooking->Tour()->write();
         $code = substr((string) $this->currentBooking->Code, 0, 9);
         $settings = TourBookingSettings::inst();
 
         // Handle payment if required and enabled
         if ($this->isPaymentEnabled() && $this->currentBooking->requiresPayment()) {
+            PaymentLogger::info('payment.initiate', [
+                'bookingID' => $this->currentBooking->ID,
+                'bookingCode' => $this->currentBooking->Code,
+                'amount' => $this->currentBooking->getPaymentAmount(),
+                'currency' => 'NZD',
+            ]);
             $paymentResult = $this->processPayment($this->currentBooking, $data);
             if (!$paymentResult['success']) {
+                PaymentLogger::error('payment.failed', [
+                    'bookingID' => $this->currentBooking->ID,
+                    'bookingCode' => $this->currentBooking->Code,
+                    'error' => $paymentResult['message'] ?? 'unknown',
+                ]);
                 $this->currentBooking->delete();
                 $this->sessionError($paymentResult['message'], 'bad');
                 return $this->controller->redirectBack();
@@ -528,6 +578,11 @@ class TourBookingForm extends Form
             
             // Handle 3D Secure redirect
             if (isset($paymentResult['redirect'])) {
+                PaymentLogger::info('payment.redirect', [
+                    'bookingID' => $this->currentBooking->ID,
+                    'bookingCode' => $this->currentBooking->Code,
+                    'redirect' => $paymentResult['redirect'],
+                ]);
                 return $this->controller->redirect($paymentResult['redirect']);
             }
         }
@@ -542,6 +597,11 @@ class TourBookingForm extends Form
 
         $redirect = $this->currentBooking->ConfirmLink();
 
+        PaymentLogger::info('booking.redirect.confirm', [
+            'bookingID' => $this->currentBooking->ID,
+            'bookingCode' => $this->currentBooking->Code,
+            'redirect' => $redirect,
+        ]);
         return $this->controller->redirect($redirect);
     }
 
@@ -571,6 +631,10 @@ class TourBookingForm extends Form
         $logger = Injector::inst()->get(LoggerInterface::class);
         
         try {
+            PaymentLogger::info('payment.create', [
+                'bookingID' => $booking->ID,
+                'bookingCode' => $booking->Code,
+            ]);
             // Validation: Check payment amount
             $paymentAmount = $booking->getPaymentAmount();
             if (!$booking->validatePaymentAmount($paymentAmount)) {
@@ -597,6 +661,13 @@ class TourBookingForm extends Form
                 ->setFailureUrl($this->controller->Link('paymentcallback/failure'));
 
             $payment->write();
+            PaymentLogger::info('payment.persisted', [
+                'paymentID' => $payment->ID,
+                'paymentIdentifier' => $payment->Identifier,
+                'gateway' => PaymentConstants::GATEWAY_STRIPE,
+                'amount' => $paymentAmount,
+                'currency' => $currency,
+            ]);
 
             // Ensure callbacks can load the Payment by identifier (support query param based callbacks)
             $success = Controller::join_links($this->controller->Link('paymentcallback'), 'complete') . '?identifier=' . urlencode($payment->Identifier);
@@ -607,12 +678,21 @@ class TourBookingForm extends Form
             
             // Process payment with Stripe token
             $service = ServiceFactory::create()->getService($payment, ServiceFactory::INTENT_PURCHASE);
+            PaymentLogger::info('payment.gateway.request', [
+                'paymentID' => $payment->ID,
+                'token_present' => isset($data['stripeToken']) && !empty($data['stripeToken']),
+            ]);
             $response = $service->initiate([
                 'token' => $data['stripeToken'],
                 'description' => 'Booking: ' . $booking->Code,
             ]);
             
             if ($response->isSuccessful()) {
+                PaymentLogger::info('payment.gateway.success', [
+                    'paymentID' => $payment->ID,
+                    'transactionReference' => $response->getTransactionReference(),
+                    'paymentIntentReference' => method_exists($response, 'getPaymentIntentReference') ? $response->getPaymentIntentReference() : null,
+                ]);
                 // Use centralized payment status method
                 $booking->markPaymentSuccessful(
                     $response->getTransactionReference(),
@@ -620,11 +700,19 @@ class TourBookingForm extends Form
                 );
                 return ['success' => true];
             } elseif ($response->isRedirect()) {
+                PaymentLogger::info('payment.gateway.redirect', [
+                    'paymentID' => $payment->ID,
+                    'paymentIntentReference' => method_exists($response, 'getPaymentIntentReference') ? $response->getPaymentIntentReference() : null,
+                ]);
                 // 3D Secure required - store payment intent ID
                 $booking->PaymentIntentId = $response->getPaymentIntentReference();
                 $booking->write();
                 return ['success' => true, 'redirect' => $response->getRedirectUrl()];
             } else {
+                PaymentLogger::error('payment.gateway.error', [
+                    'paymentID' => $payment->ID,
+                    'message' => $response->getMessage(),
+                ]);
                 throw new PaymentProcessingException('Payment failed: ' . $response->getMessage());
             }
             
@@ -633,6 +721,11 @@ class TourBookingForm extends Form
                 'booking_id' => $booking->ID,
                 'error' => $e->getAdminMessage()
             ]);
+            PaymentLogger::error('payment.validation.error', [
+                'bookingID' => $booking->ID,
+                'bookingCode' => $booking->Code,
+                'message' => $e->getAdminMessage(),
+            ]);
             return ['success' => false, 'message' => $e->getUserMessage()];
             
         } catch (PaymentGatewayException $e) {
@@ -640,12 +733,22 @@ class TourBookingForm extends Form
                 'booking_id' => $booking->ID,
                 'error' => $e->getAdminMessage()
             ]);
+            PaymentLogger::error('payment.gateway.exception', [
+                'bookingID' => $booking->ID,
+                'bookingCode' => $booking->Code,
+                'message' => $e->getAdminMessage(),
+            ]);
             return ['success' => false, 'message' => $e->getUserMessage()];
             
         } catch (PaymentProcessingException $e) {
             $logger->error('Payment processing error for booking ' . $booking->Code, [
                 'booking_id' => $booking->ID,
                 'error' => $e->getAdminMessage()
+            ]);
+            PaymentLogger::error('payment.processing.exception', [
+                'bookingID' => $booking->ID,
+                'bookingCode' => $booking->Code,
+                'message' => $e->getAdminMessage(),
             ]);
             return ['success' => false, 'message' => $e->getUserMessage()];
             
@@ -655,6 +758,11 @@ class TourBookingForm extends Form
                 'booking_id' => $booking->ID,
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
+            ]);
+            PaymentLogger::error('payment.exception', [
+                'bookingID' => $booking->ID,
+                'bookingCode' => $booking->Code,
+                'message' => $e->getMessage(),
             ]);
             return [
                 'success' => false, 
