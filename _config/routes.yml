@@ -4,4 +4,4 @@ After: omnipay-routes
 ---
 SilverStripe\Control\Director:
   rules:
-    'payment-webhook' : Sunnysideup\Bookings\Pages\TourBookingPageController 
+    'payment' : Sunnysideup\Bookings\Pages\TourBookingPageController 

@@ -726,7 +726,7 @@ class TourBookingPageController extends PageController
 
         return $finalArrayList;
     }
-    
+
     /**
      * Handle payment callback after 3D Secure authentication
      */
@@ -734,15 +734,15 @@ class TourBookingPageController extends PageController
     {
         $status = $request->param('Status');
         $payment = $this->getPaymentFromRequest($request);
-        
+
         if (!$payment) {
             return $this->httpError(404, 'Payment not found');
         }
-        
+
         // Complete the payment after 3D Secure authentication
         $service = ServiceFactory::create()->getService($payment, ServiceFactory::INTENT_PURCHASE);
         $response = $service->complete();
-        
+
         if ($response->isSuccessful()) {
             // Update booking status using centralized method
             $booking = $this->getBookingFromPayment($payment);
@@ -752,7 +752,7 @@ class TourBookingPageController extends PageController
                     $response->getPaymentIntentReference()
                 );
             }
-            
+
             return $this->redirect($this->Link('paymentsuccess'));
         } else {
             // Update booking status to failed using centralized method
@@ -763,29 +763,47 @@ class TourBookingPageController extends PageController
                     $response->getMessage()
                 );
             }
-            
+
             return $this->redirect($this->Link('paymentfailure'));
         }
     }
-    
+
     /**
      * Handle Stripe webhooks
      */
     public function paymentwebhook($request)
     {
         $logger = Injector::inst()->get(LoggerInterface::class);
-        
+
+        // Test mode - accessible via browser with ?test=1
+        if ($request->getVar('test') === '1') {
+            $response = new HTTPResponse(
+                'SUCCESS: Webhook routing is working correctly!' . PHP_EOL .
+                'Route: payment → Method: paymentwebhook()' . PHP_EOL .
+                'URL: ' . $request->getURL() . PHP_EOL .
+                'Stripe API Version: 2024-04-10',
+                200
+            );
+            $response->addHeader('Content-Type', 'text/plain');
+            return $response;
+        }
+
+        // VALIDATION: Check if this is a legitimate Stripe webhook call
+        if (!$this->isValidStripeWebhookRequest($request, $logger)) {
+            return $this->httpError(400, 'Invalid webhook request');
+        }
+
         try {
             $payload = $request->getBody();
             $sigHeader = $request->getHeader('Stripe-Signature');
             $endpointSecret = Environment::getEnv('STRIPE_WEBHOOK_SECRET');
-            
+
             // SECURITY: Always require webhook secret
             if (!$endpointSecret) {
                 $logger->error('Webhook endpoint called without STRIPE_WEBHOOK_SECRET configured');
                 return $this->httpError(400, 'Webhook secret required');
             }
-            
+
             try {
                 $event = \Stripe\Webhook::constructEvent($payload, $sigHeader, $endpointSecret);
             } catch(\UnexpectedValueException $e) {
@@ -795,16 +813,16 @@ class TourBookingPageController extends PageController
                 $logger->warning('Invalid webhook signature received', ['error' => $e->getMessage()]);
                 return $this->httpError(400, 'Invalid signature');
             }
-            
+
             // Process webhook with proper error handling
             $result = $this->processWebhookEvent($event);
-            
+
             if ($result) {
                 return new HTTPResponse('OK', 200);
             } else {
                 return $this->httpError(400, 'Event processing failed');
             }
-            
+
         } catch (Exception $e) {
             $logger->critical('Unexpected webhook error', [
                 'error' => $e->getMessage(),
@@ -813,7 +831,7 @@ class TourBookingPageController extends PageController
             return $this->httpError(500, 'Internal server error');
         }
     }
-    
+
     /**
      * Process webhook event with replay protection
      */
@@ -834,26 +852,26 @@ class TourBookingPageController extends PageController
                 return true;
         }
     }
-    
+
     /**
      * Handle successful payment via webhook
      */
     protected function handlePaymentSuccess($paymentIntent, string $eventId = '', int $eventTimestamp = 0): bool
     {
         $logger = Injector::inst()->get(LoggerInterface::class);
-        
+
         // Find booking by payment intent ID
         $booking = Booking::get()
             ->filter('PaymentIntentId', $paymentIntent->id)
             ->first();
-        
+
         if (!$booking) {
             $logger->warning('Webhook payment success: booking not found', [
                 'payment_intent_id' => $paymentIntent->id
             ]);
             return false;
         }
-        
+
         // REPLAY PROTECTION: Check if this event should be processed
         if ($eventId && $eventTimestamp && !$booking->shouldProcessWebhookEvent($eventId, $eventTimestamp)) {
             $logger->info('Webhook replay detected for payment success', [
@@ -862,41 +880,41 @@ class TourBookingPageController extends PageController
             ]);
             return false;
         }
-        
+
         // Use centralized payment status method
         $booking->markPaymentSuccessful($paymentIntent->id, $paymentIntent->id);
-        
+
         // Mark event as processed
         if ($eventId && $eventTimestamp) {
             $booking->markWebhookProcessed($eventId, $eventTimestamp);
         }
-        
+
         $logger->info('Payment success processed via webhook', [
             'booking_code' => $booking->Code,
             'payment_intent_id' => $paymentIntent->id
         ]);
-        
+
         return true;
     }
-    
+
     /**
      * Handle failed payment via webhook
      */
     protected function handlePaymentFailure($paymentIntent, string $eventId = '', int $eventTimestamp = 0): bool
     {
         $logger = Injector::inst()->get(LoggerInterface::class);
-        
+
         $booking = Booking::get()
             ->filter('PaymentIntentId', $paymentIntent->id)
             ->first();
-        
+
         if (!$booking) {
             $logger->warning('Webhook payment failure: booking not found', [
                 'payment_intent_id' => $paymentIntent->id
             ]);
             return false;
         }
-        
+
         // REPLAY PROTECTION: Check if this event should be processed
         if ($eventId && $eventTimestamp && !$booking->shouldProcessWebhookEvent($eventId, $eventTimestamp)) {
             $logger->info('Webhook replay detected for payment failure', [
@@ -905,23 +923,23 @@ class TourBookingPageController extends PageController
             ]);
             return false;
         }
-        
+
         // Use centralized payment status method
         $booking->markPaymentFailed($paymentIntent->id, 'Payment failed via webhook');
-        
+
         // Mark event as processed
         if ($eventId && $eventTimestamp) {
             $booking->markWebhookProcessed($eventId, $eventTimestamp);
         }
-        
+
         $logger->warning('Payment failure processed via webhook', [
             'booking_code' => $booking->Code,
             'payment_intent_id' => $paymentIntent->id
         ]);
-        
+
         return true;
     }
-    
+
     /**
      * Get payment from request
      */
@@ -939,7 +957,7 @@ class TourBookingPageController extends PageController
             ->filter('Identifier:not', '')
             ->first();
     }
-    
+
     /**
      * Get booking from payment
      */
@@ -950,7 +968,122 @@ class TourBookingPageController extends PageController
             ->filter('Payments.ID', $payment->ID)
             ->first();
     }
-    
+
+    /**
+     * Validate if the request is a legitimate Stripe webhook call
+     * 
+     * @param HTTPRequest $request
+     * @param LoggerInterface $logger
+     * @return bool
+     */
+    protected function isValidStripeWebhookRequest($request, LoggerInterface $logger): bool
+    {
+        // 1. Check HTTP method - Stripe webhooks are always POST
+        if (!$request->isPOST()) {
+            $logger->warning('Webhook request rejected: not a POST request', [
+                'method' => $request->httpMethod(),
+                'ip' => $request->getIP()
+            ]);
+            return false;
+        }
+
+        // 2. Check for Stripe-Signature header
+        $stripeSignature = $request->getHeader('Stripe-Signature');
+        if (empty($stripeSignature)) {
+            $logger->warning('Webhook request rejected: missing Stripe-Signature header', [
+                'ip' => $request->getIP(),
+                'user_agent' => $request->getHeader('User-Agent')
+            ]);
+            return false;
+        }
+
+        // 3. Check Content-Type header
+        $contentType = $request->getHeader('Content-Type');
+        if (empty($contentType) || strpos($contentType, 'application/json') === false) {
+            $logger->warning('Webhook request rejected: invalid Content-Type', [
+                'content_type' => $contentType,
+                'ip' => $request->getIP()
+            ]);
+            return false;
+        }
+
+        // 4. Check for payload
+        $payload = $request->getBody();
+        if (empty($payload)) {
+            $logger->warning('Webhook request rejected: empty payload', [
+                'ip' => $request->getIP()
+            ]);
+            return false;
+        }
+
+        // 5. Validate JSON structure
+        $data = json_decode($payload, true);
+        if (json_last_error() !== JSON_ERROR_NONE) {
+            $logger->warning('Webhook request rejected: invalid JSON payload', [
+                'json_error' => json_last_error_msg(),
+                'ip' => $request->getIP()
+            ]);
+            return false;
+        }
+
+        // 6. Check for required Stripe webhook fields
+        $requiredFields = ['id', 'object', 'created', 'data', 'type'];
+        foreach ($requiredFields as $field) {
+            if (!isset($data[$field])) {
+                $logger->warning('Webhook request rejected: missing required field', [
+                    'missing_field' => $field,
+                    'ip' => $request->getIP()
+                ]);
+                return false;
+            }
+        }
+
+        // 7. Validate object type is 'event'
+        if ($data['object'] !== 'event') {
+            $logger->warning('Webhook request rejected: object is not event', [
+                'object_type' => $data['object'],
+                'ip' => $request->getIP()
+            ]);
+            return false;
+        }
+
+        // 8. Check if event type is one we handle
+        $supportedEventTypes = [
+            'payment_intent.succeeded',
+            'payment_intent.payment_failed',
+            'payment_intent.requires_action',
+            'payment_intent.canceled'
+        ];
+        
+        if (!in_array($data['type'], $supportedEventTypes)) {
+            $logger->info('Webhook event type not handled (but valid)', [
+                'event_type' => $data['type'],
+                'event_id' => $data['id'],
+                'ip' => $request->getIP()
+            ]);
+            // Return true - it's a valid webhook, just not one we process
+            return true;
+        }
+
+        // 9. Check User-Agent contains 'Stripe'
+        $userAgent = $request->getHeader('User-Agent');
+        if (empty($userAgent) || strpos($userAgent, 'Stripe') === false) {
+            $logger->warning('Webhook request rejected: suspicious User-Agent', [
+                'user_agent' => $userAgent,
+                'ip' => $request->getIP()
+            ]);
+            return false;
+        }
+
+        $logger->info('Webhook request passed validation', [
+            'event_type' => $data['type'],
+            'event_id' => $data['id'],
+            'ip' => $request->getIP()
+        ]);
+
+        return true;
+    }
+
     /**
      * Payment success page
      */
@@ -959,7 +1092,7 @@ class TourBookingPageController extends PageController
         // Handle successful payment page
         return $this->renderWith(['PaymentSuccess', 'Page']);
     }
-    
+
     /**
      * Payment failure page
      */
