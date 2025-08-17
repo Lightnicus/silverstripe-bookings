@@ -697,16 +697,40 @@ class TourBookingForm extends Form
             ]);
             
             if ($response->isSuccessful()) {
+                // Get Payment Intent ID for admin display
+                $omnipayResponse = $response->getOmnipayResponse();
+                $paymentIntentRef = $omnipayResponse && method_exists($omnipayResponse, 'getPaymentIntentReference') 
+                    ? $omnipayResponse->getPaymentIntentReference() 
+                    : null;
+                
+                if ($paymentIntentRef) {
+                    $payment->PaymentIntentId = $paymentIntentRef;
+                    $payment->write();
+                }
+                
                 PaymentLogger::info('payment.gateway.success', [
                     'paymentID' => $payment->ID,
+                    'paymentIntentReference' => $paymentIntentRef,
                 ]);
                 // Payment succeeded immediately - no 3DS required
                 // Let Omnipay handle the status update via our extension
                 return ['success' => true];
             } elseif ($response->isRedirect()) {
+                // Get Payment Intent ID for admin display and 3DS completion
+                $omnipayResponse = $response->getOmnipayResponse();
+                $paymentIntentRef = $omnipayResponse && method_exists($omnipayResponse, 'getPaymentIntentReference') 
+                    ? $omnipayResponse->getPaymentIntentReference() 
+                    : null;
+                
+                if ($paymentIntentRef) {
+                    $payment->PaymentIntentId = $paymentIntentRef;
+                    $payment->write();
+                }
+                
                 PaymentLogger::info('payment.gateway.redirect', [
                     'paymentID' => $payment->ID,
                     'redirectUrl' => $response->getTargetUrl(),
+                    'paymentIntentReference' => $paymentIntentRef,
                 ]);
                 // 3D Secure required - redirect to Stripe
                 // Omnipay will handle the completion via PaymentGatewayController
