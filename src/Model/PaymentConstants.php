@@ -8,6 +8,7 @@ namespace Sunnysideup\Bookings\Model;
 class PaymentConstants
 {
     const GATEWAY_STRIPE = 'Stripe';
+    const GATEWAY_STRIPE_PAYMENT_INTENTS = 'Stripe_PaymentIntents';
     const GATEWAY_MANUAL = 'Manual';
     
     const STATUS_PENDING = 'Pending';

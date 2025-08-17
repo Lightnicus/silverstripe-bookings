@@ -4,6 +4,8 @@ namespace Sunnysideup\Bookings\Extensions;
 
 use SilverStripe\ORM\DataExtension;
 use Sunnysideup\Bookings\Model\Booking;
+use Sunnysideup\Bookings\Logging\PaymentLogger;
+use Sunnysideup\Bookings\Model\PaymentConstants;
 
 /**
  * Extension for SilverStripe\Omnipay\Model\Payment to add relationship back to Booking
@@ -48,5 +50,40 @@ class PaymentExtension extends DataExtension
         }
         
         return $reference;
+    }
+
+    /**
+     * Hook into successful payment capture to update related booking
+     */
+    public function onCaptured($serviceResponse): void
+    {
+        // Only handle Stripe Payment Intents
+        if ($this->owner->Gateway !== PaymentConstants::GATEWAY_STRIPE_PAYMENT_INTENTS) {
+            return;
+        }
+
+        // Find the related booking
+        $booking = Booking::get()->filter('ID', $this->owner->BookingID)->first();
+        if (!$booking) {
+            return;
+        }
+
+        // Get transaction references
+        $transactionRef = $this->owner->TransactionReference;
+        $omnipayResponse = $serviceResponse->getOmnipayResponse();
+        $paymentIntentRef = $omnipayResponse && method_exists($omnipayResponse, 'getPaymentIntentReference') 
+            ? $omnipayResponse->getPaymentIntentReference() 
+            : null;
+
+        // Update booking status to successful
+        $booking->markPaymentSuccessful($transactionRef, $paymentIntentRef);
+        
+        PaymentLogger::info('payment.captured', [
+            'bookingID' => $booking->ID,
+            'bookingCode' => $booking->Code,
+            'paymentID' => $this->owner->ID,
+            'transactionReference' => $transactionRef,
+            'paymentIntentReference' => $paymentIntentRef,
+        ]);
     }
 }

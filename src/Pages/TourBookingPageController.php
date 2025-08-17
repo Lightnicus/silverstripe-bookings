@@ -92,7 +92,7 @@ class TourBookingPageController extends PageController
         'confirmselfcheckin' => true,
 
         //payment
-        'paymentcallback' => true,
+
         'paymentwebhook' => true,
         'paymentsuccess' => true,
         'paymentfailure' => true,
@@ -728,70 +728,7 @@ class TourBookingPageController extends PageController
         return $finalArrayList;
     }
 
-    /**
-     * Handle payment callback after 3D Secure authentication
-     */
-    public function paymentcallback($request)
-    {
-        PaymentLogger::info('payment.callback.start', [
-            'route' => 'paymentcallback',
-            'statusParam' => $request->param('Status'),
-            'identifier' => $request->param('Identifier') ?: $request->getVar('identifier'),
-        ]);
-        $status = $request->param('Status');
-        $payment = $this->getPaymentFromRequest($request);
 
-        if (!$payment) {
-            PaymentLogger::error('payment.callback.error', [
-                'reason' => 'payment_not_found',
-            ]);
-            return $this->httpError(404, 'Payment not found');
-        }
-
-        // Complete the payment after 3D Secure authentication
-        $service = ServiceFactory::create()->getService($payment, ServiceFactory::INTENT_PURCHASE);
-        $response = $service->complete();
-
-        if ($response->isSuccessful()) {
-            // Update booking status using centralized method
-            $booking = $this->getBookingFromPayment($payment);
-            if ($booking) {
-                // Get references from underlying Omnipay response
-                $omnipayResponse = $response->getOmnipayResponse();
-                $transactionRef = $omnipayResponse && method_exists($omnipayResponse, 'getTransactionReference') ? $omnipayResponse->getTransactionReference() : null;
-                $paymentIntentRef = $omnipayResponse && method_exists($omnipayResponse, 'getPaymentIntentReference') ? $omnipayResponse->getPaymentIntentReference() : null;
-                
-                $booking->markPaymentSuccessful($transactionRef, $paymentIntentRef);
-                PaymentLogger::info('payment.callback.success', [
-                    'bookingID' => $booking->ID,
-                    'bookingCode' => $booking->Code,
-                    'transactionReference' => $transactionRef,
-                    'paymentIntentReference' => $paymentIntentRef,
-                ]);
-            }
-
-            return $this->redirect($this->Link('paymentsuccess'));
-        } else {
-            // Update booking status to failed using centralized method
-            $booking = $this->getBookingFromPayment($payment);
-            if ($booking) {
-                // Get references from underlying Omnipay response
-                $omnipayResponse = $response->getOmnipayResponse();
-                $transactionRef = $omnipayResponse && method_exists($omnipayResponse, 'getTransactionReference') ? $omnipayResponse->getTransactionReference() : null;
-                $message = $omnipayResponse && method_exists($omnipayResponse, 'getMessage') ? $omnipayResponse->getMessage() : 'Payment failed';
-                
-                $booking->markPaymentFailed($transactionRef, $message);
-                PaymentLogger::error('payment.callback.fail', [
-                    'bookingID' => $booking->ID,
-                    'bookingCode' => $booking->Code,
-                    'transactionReference' => $transactionRef,
-                    'message' => $message,
-                ]);
-            }
-
-            return $this->redirect($this->Link('paymentfailure'));
-        }
-    }
 
     /**
      * Handle Stripe webhooks
@@ -895,6 +832,19 @@ class TourBookingPageController extends PageController
                 PaymentLogger::error('payment.webhook.unhandled_type', [ 'type' => $event->type ?? null ]);
                 return true;
         }
+    }
+
+    /**
+     * Get the Stripe Payment Intents gateway instance
+     */
+    protected function getGateway()
+    {
+        $gateway = \Omnipay\Omnipay::create(PaymentConstants::GATEWAY_STRIPE_PAYMENT_INTENTS);
+        $gateway->initialize([
+            'apiKey' => Environment::getEnv('STRIPE_SECRET_KEY'),
+            'publishableKey' => Environment::getEnv('STRIPE_PUBLISHABLE_KEY'),
+        ]);
+        return $gateway;
     }
 
     /**

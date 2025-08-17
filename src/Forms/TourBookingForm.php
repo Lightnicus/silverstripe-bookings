@@ -32,6 +32,7 @@ use Sunnysideup\Bookings\Exceptions\PaymentGatewayException;
 use SilverStripe\Core\Environment;
 use SilverStripe\View\Requirements;
 use Sunnysideup\Bookings\Logging\PaymentLogger;
+use SilverStripe\Control\Director;
 
 class TourBookingForm extends Form
 {
@@ -654,11 +655,11 @@ class TourBookingForm extends Form
                 return ['success' => true];
             }
 
-            // Create payment via SilverStripe Omnipay
+            // Create payment via SilverStripe Omnipay using Payment Intents API
             $payment = Payment::create()
-                ->init(PaymentConstants::GATEWAY_STRIPE, $paymentAmount, $currency)
-                ->setSuccessUrl($this->controller->Link('paymentcallback/complete'))
-                ->setFailureUrl($this->controller->Link('paymentcallback/failure'));
+                ->init(PaymentConstants::GATEWAY_STRIPE_PAYMENT_INTENTS, $paymentAmount, $currency)
+                ->setSuccessUrl($booking->ConfirmLink())
+                ->setFailureUrl($this->controller->Link('paymentfailure'));
 
             $payment->write();
             
@@ -674,52 +675,42 @@ class TourBookingForm extends Form
                 'currency' => $currency,
                 'bookingID' => $booking->ID,
             ]);
-
-            // Ensure callbacks can load the Payment by identifier (support query param based callbacks)
-            $success = Controller::join_links($this->controller->Link('paymentcallback'), 'complete') . '?identifier=' . urlencode($payment->Identifier);
-            $failure = Controller::join_links($this->controller->Link('paymentcallback'), 'failure') . '?identifier=' . urlencode($payment->Identifier);
-            $payment->setSuccessUrl($success);
-            $payment->setFailureUrl($failure);
-            $payment->write();
             
-            // Process payment with Stripe token
+            // Process payment with Stripe token using Payment Intents API for better 3DS support
             $service = ServiceFactory::create()->getService($payment, ServiceFactory::INTENT_PURCHASE);
             PaymentLogger::info('payment.gateway.request', [
                 'paymentID' => $payment->ID,
                 'token_present' => isset($data['stripeToken']) && !empty($data['stripeToken']),
             ]);
+            
+            // Force 3DS testing by using Payment Intents API with specific parameters
             $response = $service->initiate([
                 'token' => $data['stripeToken'],
                 'description' => 'Booking: ' . $booking->Code,
+                'confirm' => true, // Force immediate confirmation which triggers 3DS if needed
+                'setupFutureUsage' => 'off_session', // This can trigger 3DS
+                'metadata' => [
+                    'booking_id' => $booking->ID,
+                    'booking_code' => $booking->Code,
+                    'force_3ds_test' => 'true'
+                ]
             ]);
             
             if ($response->isSuccessful()) {
-                // Get transaction reference from underlying Omnipay response
-                $omnipayResponse = $response->getOmnipayResponse();
-                $transactionRef = $omnipayResponse && method_exists($omnipayResponse, 'getTransactionReference') ? $omnipayResponse->getTransactionReference() : null;
-                $paymentIntentRef = $omnipayResponse && method_exists($omnipayResponse, 'getPaymentIntentReference') ? $omnipayResponse->getPaymentIntentReference() : null;
-                
                 PaymentLogger::info('payment.gateway.success', [
                     'paymentID' => $payment->ID,
-                    'transactionReference' => $transactionRef,
-                    'paymentIntentReference' => $paymentIntentRef,
                 ]);
-                // Use centralized payment status method
-                $booking->markPaymentSuccessful($transactionRef, $paymentIntentRef);
+                // Payment succeeded immediately - no 3DS required
+                // Let Omnipay handle the status update via our extension
                 return ['success' => true];
             } elseif ($response->isRedirect()) {
-                // Get payment intent reference from underlying Omnipay response
-                $omnipayResponse = $response->getOmnipayResponse();
-                $paymentIntentRef = $omnipayResponse && method_exists($omnipayResponse, 'getPaymentIntentReference') ? $omnipayResponse->getPaymentIntentReference() : null;
-                
                 PaymentLogger::info('payment.gateway.redirect', [
                     'paymentID' => $payment->ID,
-                    'paymentIntentReference' => $paymentIntentRef,
+                    'redirectUrl' => $response->getTargetUrl(),
                 ]);
-                // 3D Secure required - store payment intent ID
-                $booking->PaymentIntentId = $paymentIntentRef;
-                $booking->write();
-                return ['success' => true, 'redirect' => $response->getRedirectUrl()];
+                // 3D Secure required - redirect to Stripe
+                // Omnipay will handle the completion via PaymentGatewayController
+                return ['success' => true, 'redirect' => $response->getTargetUrl()];
             } else {
                 $omni = method_exists($response, 'getOmnipayResponse') ? $response->getOmnipayResponse() : null;
                 $msg = ($omni && method_exists($omni, 'getMessage')) ? (string) $omni->getMessage() : 'Unknown gateway error';
