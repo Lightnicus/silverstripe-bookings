@@ -661,12 +661,18 @@ class TourBookingForm extends Form
                 ->setFailureUrl($this->controller->Link('paymentcallback/failure'));
 
             $payment->write();
+            
+            // Link Payment to Booking
+            $payment->BookingID = $booking->ID;
+            $payment->write();
+            
             PaymentLogger::info('payment.persisted', [
                 'paymentID' => $payment->ID,
                 'paymentIdentifier' => $payment->Identifier,
                 'gateway' => PaymentConstants::GATEWAY_STRIPE,
                 'amount' => $paymentAmount,
                 'currency' => $currency,
+                'bookingID' => $booking->ID,
             ]);
 
             // Ensure callbacks can load the Payment by identifier (support query param based callbacks)
