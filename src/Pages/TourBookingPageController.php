@@ -1083,55 +1083,533 @@ class TourBookingPageController extends PageController
      */
     public function paymentfailure($request)
     {
-        // Try to get booking details for the failure page
-        $bookingCode = $request->getVar('booking');
-        if ($bookingCode) {
-            $this->currentBooking = Booking::get()->filter('Code', $bookingCode)->first();
-        }
-        
         $session = $request->getSession();
+        
+        PaymentLogger::info('payment.failure_page_start', [
+            'url' => $request->getURL(),
+            'queryParams' => $request->getVars(),
+            'userAgent' => $request->getHeader('User-Agent'),
+            'referer' => $request->getHeader('Referer'),
+        ]);
         
         // Clear any Stripe tokens from session to prevent reuse
         $this->clearStripeTokensFromSession($session);
         
-        // If no booking found via URL, try to get from session (if form data is still available)
-        if (!$this->currentBooking) {
-            $bookingData = $session->get('FormInfo.TourBookingPageController_BookingForm.data');
-            if (!$bookingData) {
-                // Try other possible form names
-                $possibleFormNames = [
-                    'FormInfo.PicsTourBookingForm_BookingForm.data',
-                    'FormInfo.TourBookingForm.data',
-                    'FormInfo.BookingForm.data'
+        // Strategy 1: URL parameter (if manually passed)
+        $bookingToDelete = null;
+        $identificationMethod = 'none';
+        $identificationAttempts = [];
+        
+        $bookingCode = $request->getVar('booking');
+        PaymentLogger::info('payment.failure_strategy1_url', [
+            'bookingCode' => $bookingCode,
+            'hasBookingParam' => !empty($bookingCode),
+        ]);
+        
+        if ($bookingCode) {
+            $bookingToDelete = Booking::get()->filter('Code', $bookingCode)->first();
+            if ($bookingToDelete) {
+                $identificationMethod = 'url_parameter';
+                $identificationAttempts[] = [
+                    'strategy' => 'url_parameter',
+                    'success' => true,
+                    'bookingID' => $bookingToDelete->ID,
+                    'bookingCode' => $bookingToDelete->Code,
                 ];
-                
-                foreach ($possibleFormNames as $formKey) {
-                    $bookingData = $session->get($formKey);
-                    if ($bookingData) {
-                        break;
-                    }
-                }
+                PaymentLogger::info('payment.failure_strategy1_success', [
+                    'bookingID' => $bookingToDelete->ID,
+                    'bookingCode' => $bookingToDelete->Code,
+                ]);
+            } else {
+                $identificationAttempts[] = [
+                    'strategy' => 'url_parameter',
+                    'success' => false,
+                    'reason' => 'booking_not_found',
+                    'searchedCode' => $bookingCode,
+                ];
+                PaymentLogger::error('payment.failure_strategy1_failed', [
+                    'searchedCode' => $bookingCode,
+                    'reason' => 'booking_not_found',
+                ]);
             }
-            
-            if ($bookingData && isset($bookingData['TourID'])) {
-                // We can show tour info even without a saved booking
-                $this->currentBooking = (object)[
-                    'Tour' => Tour::get()->byID($bookingData['TourID']),
-                    'BookingDate' => isset($bookingData['BookingDate']) ? DBDate::create()->setValue($bookingData['BookingDate']) : null,
-                    'TotalNumberOfGuests' => $bookingData['TotalNumberOfGuests'] ?? 0,
-                    'Code' => 'UNSAVED'
+        }
+        
+        // Strategy 2: Recent payment lookup (most reliable)
+        if (!$bookingToDelete) {
+            PaymentLogger::info('payment.failure_strategy2_start', [
+                'reason' => 'strategy1_failed_or_no_url_param',
+            ]);
+            $bookingToDelete = $this->identifyBookingFromRecentPayment($request);
+            if ($bookingToDelete) {
+                $identificationMethod = 'payment_lookup';
+                $identificationAttempts[] = [
+                    'strategy' => 'payment_lookup',
+                    'success' => true,
+                    'bookingID' => $bookingToDelete->ID,
+                    'bookingCode' => $bookingToDelete->Code,
+                ];
+            } else {
+                $identificationAttempts[] = [
+                    'strategy' => 'payment_lookup',
+                    'success' => false,
+                    'reason' => 'no_matching_payment_found',
                 ];
             }
         }
         
+        // Strategy 3: Session data fallback (least reliable)  
+        if (!$bookingToDelete) {
+            PaymentLogger::info('payment.failure_strategy3_start', [
+                'reason' => 'previous_strategies_failed',
+            ]);
+            $bookingToDelete = $this->identifyBookingFromSession($request);
+            if ($bookingToDelete) {
+                $identificationMethod = 'session_data';
+                $identificationAttempts[] = [
+                    'strategy' => 'session_data',
+                    'success' => true,
+                    'bookingID' => $bookingToDelete->ID,
+                    'bookingCode' => $bookingToDelete->Code,
+                ];
+            } else {
+                $identificationAttempts[] = [
+                    'strategy' => 'session_data',
+                    'success' => false,
+                    'reason' => 'no_matching_session_booking',
+                ];
+            }
+        }
+        
+        // Log all identification attempts
+        PaymentLogger::info('payment.failure_identification_summary', [
+            'finalMethod' => $identificationMethod,
+            'bookingFound' => !empty($bookingToDelete),
+            'bookingID' => $bookingToDelete ? $bookingToDelete->ID : null,
+            'bookingCode' => $bookingToDelete ? $bookingToDelete->Code : null,
+            'attempts' => $identificationAttempts,
+        ]);
+        
+        // Attempt to delete failed booking if safely possible
+        $deletionAttempted = false;
+        $deletionSuccess = false;
+        $deletionBlockedReason = null;
+        
+        if ($bookingToDelete) {
+            $canDelete = $this->canSafelyDeleteBooking($bookingToDelete);
+            $deletionAttempted = true;
+            
+            if ($canDelete) {
+                $this->deleteFailedBooking($bookingToDelete, $identificationMethod);
+                $deletionSuccess = true;
+            } else {
+                $deletionBlockedReason = 'safety_checks_failed';
+                PaymentLogger::error('payment.failure_deletion_blocked', [
+                    'bookingID' => $bookingToDelete->ID,
+                    'bookingCode' => $bookingToDelete->Code,
+                    'reason' => 'safety_checks_failed',
+                ]);
+            }
+        }
+        
+        // Set current booking for display (might be the same as deleted, or a fallback object)
+        $this->currentBooking = $this->getDisplayBooking($request, $bookingToDelete);
+        
         PaymentLogger::info('payment.failure_page_loaded', [
             'hasCurrentBooking' => !empty($this->currentBooking),
             'bookingCode' => $this->currentBooking ? ($this->currentBooking->Code ?? 'UNSAVED') : null,
+            'identificationMethod' => $identificationMethod,
+            'bookingFound' => !empty($bookingToDelete),
+            'deletionAttempted' => $deletionAttempted,
+            'deletionSuccess' => $deletionSuccess,
+            'deletionBlockedReason' => $deletionBlockedReason,
             'stripeTokensCleared' => true,
+            'totalIdentificationAttempts' => count($identificationAttempts),
         ]);
         
         // Handle failed payment page
         return $this->renderWith(['PaymentFailure', 'Page']);
+    }
+    
+    /**
+     * Identify booking from recent payment attempts (most reliable method)
+     */
+    private function identifyBookingFromRecentPayment($request): ?Booking
+    {
+        $session = $request->getSession();
+        
+        // Look for recent failed/pending payments in the last hour
+        $cutoffTime = date('Y-m-d H:i:s', strtotime('-1 hour'));
+        $recentPayments = Payment::get()
+            ->filter([
+                'Gateway' => PaymentConstants::GATEWAY_STRIPE_PAYMENT_INTENTS,
+                'Status' => ['Created', 'PendingPurchase', 'PendingAuthorization'],
+                'Created:GreaterThan' => $cutoffTime
+            ])
+            ->sort('Created DESC')
+            ->limit(10); // Limit to prevent performance issues
+        
+        $paymentCount = $recentPayments->count();
+        $checkedPayments = [];
+        
+        PaymentLogger::info('payment.failure_payment_lookup_start', [
+            'cutoffTime' => $cutoffTime,
+            'totalRecentPayments' => $paymentCount,
+            'gateway' => PaymentConstants::GATEWAY_STRIPE_PAYMENT_INTENTS,
+        ]);
+        
+        foreach ($recentPayments as $payment) {
+            $paymentInfo = [
+                'paymentID' => $payment->ID,
+                'paymentStatus' => $payment->Status,
+                'paymentCreated' => $payment->Created,
+                'hasBookingID' => !empty($payment->BookingID),
+                'bookingID' => $payment->BookingID,
+            ];
+            
+            if ($payment->BookingID) {
+                $booking = Booking::get()->byID($payment->BookingID);
+                $paymentInfo['bookingFound'] = !empty($booking);
+                
+                if ($booking) {
+                    $paymentInfo['bookingCode'] = $booking->Code;
+                    $paymentInfo['bookingEmail'] = $booking->InitiatingEmail;
+                    $paymentInfo['bookingPhone'] = $booking->PrimaryPhone;
+                    
+                    $belongsToUser = $this->belongsToCurrentUser($booking, $session);
+                    $paymentInfo['belongsToCurrentUser'] = $belongsToUser;
+                    
+                    if ($belongsToUser) {
+                        PaymentLogger::info('booking.identified_via_payment', [
+                            'bookingID' => $booking->ID,
+                            'bookingCode' => $booking->Code,
+                            'paymentID' => $payment->ID,
+                            'paymentStatus' => $payment->Status,
+                            'matchMethod' => 'payment_lookup_success',
+                        ]);
+                        return $booking;
+                    }
+                }
+            }
+            
+            $checkedPayments[] = $paymentInfo;
+        }
+        
+        PaymentLogger::info('payment.failure_payment_lookup_complete', [
+            'totalChecked' => count($checkedPayments),
+            'matchFound' => false,
+            'checkedPayments' => $checkedPayments,
+        ]);
+        
+        return null;
+    }
+    
+    /**
+     * Identify booking from session data (fallback method)
+     */
+    private function identifyBookingFromSession($request): ?Booking
+    {
+        $session = $request->getSession();
+        
+        // Try different possible session keys
+        $possibleFormNames = [
+            'FormInfo.TourBookingPageController_BookingForm.data',
+            'FormInfo.PicsTourBookingForm_BookingForm.data',
+            'FormInfo.TourBookingForm.data',
+            'FormInfo.BookingForm.data'
+        ];
+        
+        $sessionDataChecks = [];
+        $bookingData = null;
+        $usedSessionKey = null;
+        
+        foreach ($possibleFormNames as $formKey) {
+            $sessionData = $session->get($formKey);
+            $sessionCheck = [
+                'formKey' => $formKey,
+                'hasData' => !empty($sessionData),
+                'hasEmail' => isset($sessionData['InitiatingEmail']),
+                'hasTourID' => isset($sessionData['TourID']),
+                'email' => $sessionData['InitiatingEmail'] ?? null,
+                'tourID' => $sessionData['TourID'] ?? null,
+                'dataKeys' => is_array($sessionData) ? array_keys($sessionData) : 'not_array',
+            ];
+            
+            if ($sessionData && isset($sessionData['InitiatingEmail'], $sessionData['TourID'])) {
+                $bookingData = $sessionData;
+                $usedSessionKey = $formKey;
+                $sessionCheck['selectedForSearch'] = true;
+            }
+            
+            $sessionDataChecks[] = $sessionCheck;
+        }
+        
+        PaymentLogger::info('payment.failure_session_lookup_start', [
+            'sessionDataChecks' => $sessionDataChecks,
+            'foundUsableData' => !empty($bookingData),
+            'selectedSessionKey' => $usedSessionKey,
+        ]);
+        
+        if (!$bookingData) {
+            PaymentLogger::info('payment.failure_session_lookup_no_data', [
+                'reason' => 'no_session_data_with_required_fields',
+                'requiredFields' => ['InitiatingEmail', 'TourID'],
+            ]);
+            return null;
+        }
+        
+        // Look for existing booking with matching email and tour
+        $searchCriteria = [
+            'InitiatingEmail' => $bookingData['InitiatingEmail'],
+            'TourID' => $bookingData['TourID']
+        ];
+        $cutoffTime = date('Y-m-d H:i:s', strtotime('-2 hours'));
+        
+        $searchCriteria['Created:GreaterThan'] = $cutoffTime;
+        $matchingBookings = Booking::get()
+            ->filter($searchCriteria)
+            ->sort('Created DESC');
+        
+        $bookingSearchResults = [];
+        foreach ($matchingBookings as $booking) {
+            $bookingSearchResults[] = [
+                'bookingID' => $booking->ID,
+                'bookingCode' => $booking->Code,
+                'bookingCreated' => $booking->Created,
+                'bookingEmail' => $booking->InitiatingEmail,
+                'bookingTourID' => $booking->TourID,
+            ];
+        }
+        
+        $existingBooking = $matchingBookings->first();
+        
+        PaymentLogger::info('payment.failure_session_lookup_search', [
+            'searchCriteria' => $searchCriteria,
+            'cutoffTime' => $cutoffTime,
+            'foundBookings' => count($bookingSearchResults),
+            'bookings' => $bookingSearchResults,
+            'selectedBooking' => $existingBooking ? $existingBooking->ID : null,
+        ]);
+            
+        if ($existingBooking) {
+            PaymentLogger::info('booking.identified_via_session', [
+                'bookingID' => $existingBooking->ID,
+                'bookingCode' => $existingBooking->Code,
+                'sessionKey' => $usedSessionKey,
+                'matchedEmail' => $bookingData['InitiatingEmail'],
+                'matchedTourID' => $bookingData['TourID'],
+                'matchMethod' => 'session_lookup_success',
+            ]);
+            return $existingBooking;
+        }
+        
+        PaymentLogger::info('payment.failure_session_lookup_no_match', [
+            'searchCriteria' => $searchCriteria,
+            'sessionKey' => $usedSessionKey,
+        ]);
+        
+        return null;
+    }
+    
+    /**
+     * Check if booking belongs to current user session
+     */
+    private function belongsToCurrentUser(Booking $booking, $session): bool
+    {
+        // Try different possible session keys to match booking data
+        $possibleFormNames = [
+            'FormInfo.TourBookingPageController_BookingForm.data',
+            'FormInfo.PicsTourBookingForm_BookingForm.data',
+            'FormInfo.TourBookingForm.data',
+            'FormInfo.BookingForm.data'
+        ];
+        
+        $sessionChecks = [];
+        
+        foreach ($possibleFormNames as $formKey) {
+            $sessionData = $session->get($formKey);
+            $sessionCheck = [
+                'formKey' => $formKey,
+                'hasSessionData' => !empty($sessionData),
+                'sessionEmail' => $sessionData['InitiatingEmail'] ?? null,
+                'sessionPhone' => $sessionData['PrimaryPhone'] ?? null,
+                'bookingEmail' => $booking->InitiatingEmail,
+                'bookingPhone' => $booking->PrimaryPhone,
+                'emailMatch' => false,
+                'phoneMatch' => false,
+                'overallMatch' => false,
+            ];
+            
+            if ($sessionData) {
+                // Match on email and phone (both should be unique identifiers)
+                $emailMatch = ($booking->InitiatingEmail === ($sessionData['InitiatingEmail'] ?? ''));
+                $phoneMatch = ($booking->PrimaryPhone === ($sessionData['PrimaryPhone'] ?? ''));
+                
+                $sessionCheck['emailMatch'] = $emailMatch;
+                $sessionCheck['phoneMatch'] = $phoneMatch;
+                $sessionCheck['overallMatch'] = $emailMatch && $phoneMatch;
+                
+                if ($emailMatch && $phoneMatch) {
+                    PaymentLogger::info('payment.failure_user_match_success', [
+                        'bookingID' => $booking->ID,
+                        'bookingCode' => $booking->Code,
+                        'matchedFormKey' => $formKey,
+                        'matchedEmail' => $booking->InitiatingEmail,
+                        'matchedPhone' => $booking->PrimaryPhone,
+                    ]);
+                    return true;
+                }
+            }
+            
+            $sessionChecks[] = $sessionCheck;
+        }
+        
+        PaymentLogger::info('payment.failure_user_match_failed', [
+            'bookingID' => $booking->ID,
+            'bookingCode' => $booking->Code,
+            'sessionChecks' => $sessionChecks,
+        ]);
+        
+        return false;
+    }
+    
+    /**
+     * Check if booking can be safely deleted
+     */
+    private function canSafelyDeleteBooking(Booking $booking): bool
+    {
+        $safetyChecks = [
+            'bookingID' => $booking->ID,
+            'bookingCode' => $booking->Code,
+            'bookingCreated' => $booking->Created,
+            'bookingCancelled' => $booking->Cancelled,
+        ];
+        
+        // Safety check 1: Don't delete if payment was actually successful
+        $payments = Payment::get()->filter('BookingID', $booking->ID);
+        $paymentStatuses = [];
+        $hasSuccessfulPayment = false;
+        
+        foreach ($payments as $payment) {
+            $paymentStatuses[] = [
+                'paymentID' => $payment->ID,
+                'status' => $payment->Status,
+                'created' => $payment->Created,
+            ];
+            
+            if (in_array($payment->Status, ['Captured', 'Authorized'])) {
+                $hasSuccessfulPayment = true;
+                PaymentLogger::error('booking.deletion_prevented.successful_payment', [
+                    'bookingID' => $booking->ID,
+                    'bookingCode' => $booking->Code,
+                    'paymentID' => $payment->ID,
+                    'paymentStatus' => $payment->Status,
+                ]);
+            }
+        }
+        
+        $safetyChecks['relatedPayments'] = $paymentStatuses;
+        $safetyChecks['hasSuccessfulPayment'] = $hasSuccessfulPayment;
+        
+        if ($hasSuccessfulPayment) {
+            $safetyChecks['preventionReason'] = 'successful_payment_exists';
+            PaymentLogger::error('booking.deletion_safety_check_failed', $safetyChecks);
+            return false; // Payment succeeded, don't delete
+        }
+        
+        // Safety check 2: Check booking age (avoid race conditions)
+        $ageInMinutes = (time() - strtotime($booking->Created)) / 60;
+        $safetyChecks['ageInMinutes'] = round($ageInMinutes, 2);
+        $safetyChecks['maxAgeLimit'] = 60;
+        
+        if ($ageInMinutes > 60) { // More than 1 hour old
+            $safetyChecks['preventionReason'] = 'booking_too_old';
+            PaymentLogger::error('booking.deletion_prevented.too_old', [
+                'bookingID' => $booking->ID,
+                'bookingCode' => $booking->Code,
+                'ageInMinutes' => round($ageInMinutes, 2),
+            ]);
+            PaymentLogger::error('booking.deletion_safety_check_failed', $safetyChecks);
+            return false; // Too old, might be legitimate booking
+        }
+        
+        // Safety check 3: Don't delete if booking is already cancelled
+        if ($booking->Cancelled) {
+            $safetyChecks['preventionReason'] = 'already_cancelled';
+            PaymentLogger::error('booking.deletion_safety_check_failed', $safetyChecks);
+            return false; // Already handled
+        }
+        
+        $safetyChecks['allChecksPassed'] = true;
+        PaymentLogger::info('booking.deletion_safety_check_passed', $safetyChecks);
+        
+        return true;
+    }
+    
+    /**
+     * Delete failed booking and cleanup related data
+     */
+    private function deleteFailedBooking(Booking $booking, string $identificationMethod): void
+    {
+        $bookingID = $booking->ID;
+        $bookingCode = $booking->Code;
+        
+        // Cleanup related Payment objects to prevent orphaning
+        $payments = Payment::get()->filter('BookingID', $bookingID);
+        $paymentCount = 0;
+        
+        foreach ($payments as $payment) {
+            if (!in_array($payment->Status, ['Captured', 'Authorized'])) {
+                // Only delete failed/pending payments, not successful ones
+                $payment->delete();
+                $paymentCount++;
+            }
+        }
+        
+        // Delete the booking itself
+        $booking->delete();
+        
+        PaymentLogger::info('booking.deleted_on_failure', [
+            'bookingID' => $bookingID,
+            'bookingCode' => $bookingCode,
+            'identificationMethod' => $identificationMethod,
+            'paymentsDeleted' => $paymentCount,
+        ]);
+    }
+    
+    /**
+     * Get booking object for display purposes (may be real or temporary)
+     */
+    private function getDisplayBooking($request, ?Booking $deletedBooking)
+    {
+        // If we deleted a booking, we still want to show its details for user context
+        if ($deletedBooking) {
+            // Return the deleted booking data for display purposes
+            return $deletedBooking;
+        }
+        
+        // Fallback: create temporary display object from session data
+        $session = $request->getSession();
+        $possibleFormNames = [
+            'FormInfo.TourBookingPageController_BookingForm.data',
+            'FormInfo.PicsTourBookingForm_BookingForm.data',
+            'FormInfo.TourBookingForm.data',
+            'FormInfo.BookingForm.data'
+        ];
+        
+        foreach ($possibleFormNames as $formKey) {
+            $bookingData = $session->get($formKey);
+            if ($bookingData && isset($bookingData['TourID'])) {
+                // Create temporary display object
+                return (object)[
+                    'Tour' => Tour::get()->byID($bookingData['TourID']),
+                    'BookingDate' => isset($bookingData['BookingDate']) ? DBDate::create()->setValue($bookingData['BookingDate']) : null,
+                    'TotalNumberOfGuests' => $bookingData['TotalNumberOfGuests'] ?? 0,
+                    'Code' => 'FAILED_BOOKING'
+                ];
+            }
+        }
+        
+        return null;
     }
     
     /**

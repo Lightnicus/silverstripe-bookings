@@ -575,7 +575,6 @@ class TourBookingForm extends Form
             'totalGuests' => (int) $this->currentBooking->getField('TotalNumberOfGuests'),
         ]);
         //$this->currentBooking->Tour()->write();
-        $code = substr((string) $this->currentBooking->Code, 0, 9);
         $settings = TourBookingSettings::inst();
 
         // Handle payment if required and enabled
@@ -693,7 +692,7 @@ class TourBookingForm extends Form
             $payment = Payment::create()
                 ->init(PaymentConstants::GATEWAY_STRIPE_PAYMENT_INTENTS, $paymentAmount, $currency)
                 ->setSuccessUrl($booking->ConfirmLink())
-                ->setFailureUrl($this->controller->Link('paymentfailure'));
+                ->setFailureUrl($this->controller->Link('paymentfailure') . '?booking=' . $booking->getShortCode());
 
             $payment->write();
             

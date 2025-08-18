@@ -85,7 +85,7 @@ class Booking extends TourBaseClass
     private static $table_name = 'Booking';
 
     private static $db = [
-        'Code' => 'Varchar(9)',
+        'Code' => 'Varchar(32)', // Full MD5 hash length
         'Date' => 'Date',
         'TotalNumberOfGuests' => 'Int',
         'InitiatingFirstName' => 'Varchar',
@@ -871,10 +871,19 @@ class Booking extends TourBaseClass
         return $this->createLink('cancel');
     }
 
+    /**
+     * Get the shortened booking code (first 9 characters)
+     * Used for URLs and public display
+     */
+    public function getShortCode(): string
+    {
+        return $this->Code ? substr((string) $this->Code, 0, 9) : '';
+    }
+
     protected function createLink(?string $action = ''): string
     {
         if ($this->Code) {
-            $code = substr((string) $this->Code, 0, 9);
+            $code = $this->getShortCode();
             $link = TourBookingPage::find_link($action . '/' . $code);
         } else {
             $link = 'error/in/' . $action . '/for/' . $this->ID . '/';
