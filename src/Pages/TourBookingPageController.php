@@ -7,6 +7,7 @@ use SilverStripe\Core\Config\Config;
 use SilverStripe\Core\Convert;
 use SilverStripe\Core\Injector\Injector;
 use SilverStripe\ORM\ArrayList;
+use SilverStripe\ORM\FieldType\DBDate;
 use SilverStripe\ORM\FieldType\DBField;
 use SilverStripe\ORM\DataList;
 use SilverStripe\Security\Permission;
@@ -94,7 +95,6 @@ class TourBookingPageController extends PageController
         //payment
 
         'paymentwebhook' => true,
-        'paymentsuccess' => true,
         'paymentfailure' => true,
     ];
 
@@ -1079,20 +1079,94 @@ class TourBookingPageController extends PageController
     }
 
     /**
-     * Payment success page
-     */
-    public function paymentsuccess($request)
-    {
-        // Handle successful payment page
-        return $this->renderWith(['PaymentSuccess', 'Page']);
-    }
-
-    /**
      * Payment failure page
      */
     public function paymentfailure($request)
     {
+        // Try to get booking details for the failure page
+        $bookingCode = $request->getVar('booking');
+        if ($bookingCode) {
+            $this->currentBooking = Booking::get()->filter('Code', $bookingCode)->first();
+        }
+        
+        $session = $request->getSession();
+        
+        // Clear any Stripe tokens from session to prevent reuse
+        $this->clearStripeTokensFromSession($session);
+        
+        // If no booking found via URL, try to get from session (if form data is still available)
+        if (!$this->currentBooking) {
+            $bookingData = $session->get('FormInfo.TourBookingPageController_BookingForm.data');
+            if (!$bookingData) {
+                // Try other possible form names
+                $possibleFormNames = [
+                    'FormInfo.PicsTourBookingForm_BookingForm.data',
+                    'FormInfo.TourBookingForm.data',
+                    'FormInfo.BookingForm.data'
+                ];
+                
+                foreach ($possibleFormNames as $formKey) {
+                    $bookingData = $session->get($formKey);
+                    if ($bookingData) {
+                        break;
+                    }
+                }
+            }
+            
+            if ($bookingData && isset($bookingData['TourID'])) {
+                // We can show tour info even without a saved booking
+                $this->currentBooking = (object)[
+                    'Tour' => Tour::get()->byID($bookingData['TourID']),
+                    'BookingDate' => isset($bookingData['BookingDate']) ? DBDate::create()->setValue($bookingData['BookingDate']) : null,
+                    'TotalNumberOfGuests' => $bookingData['TotalNumberOfGuests'] ?? 0,
+                    'Code' => 'UNSAVED'
+                ];
+            }
+        }
+        
+        PaymentLogger::info('payment.failure_page_loaded', [
+            'hasCurrentBooking' => !empty($this->currentBooking),
+            'bookingCode' => $this->currentBooking ? ($this->currentBooking->Code ?? 'UNSAVED') : null,
+            'stripeTokensCleared' => true,
+        ]);
+        
         // Handle failed payment page
         return $this->renderWith(['PaymentFailure', 'Page']);
+    }
+    
+    /**
+     * Clear Stripe tokens from all possible session keys to prevent token reuse
+     */
+    private function clearStripeTokensFromSession($session)
+    {
+        $possibleFormKeys = [
+            'FormInfo.TourBookingPageController_BookingForm.data',
+            'FormInfo.PicsTourBookingForm_BookingForm.data',
+            'FormInfo.TourBookingForm.data',
+            'FormInfo.BookingForm.data'
+        ];
+        
+        $clearedTokens = 0;
+        
+        foreach ($possibleFormKeys as $formKey) {
+            $formData = $session->get($formKey);
+            if ($formData && isset($formData['stripeToken'])) {
+                $oldToken = $formData['stripeToken'];
+                unset($formData['stripeToken']);
+                $session->set($formKey, $formData);
+                $clearedTokens++;
+                
+                PaymentLogger::info('payment.stripe_token_cleared', [
+                    'sessionKey' => $formKey,
+                    'tokenCleared' => substr($oldToken, 0, 10) . '...',
+                ]);
+            }
+        }
+        
+        if ($clearedTokens === 0) {
+            PaymentLogger::info('payment.stripe_token_clear_no_tokens', [
+                'checkedKeys' => $possibleFormKeys,
+            ]);
+        }
     }
 }
