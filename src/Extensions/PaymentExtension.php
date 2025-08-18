@@ -2,6 +2,7 @@
 
 namespace Sunnysideup\Bookings\Extensions;
 
+use SilverStripe\Control\Controller;
 use SilverStripe\ORM\DataExtension;
 use Sunnysideup\Bookings\Model\Booking;
 use Sunnysideup\Bookings\Logging\PaymentLogger;
@@ -198,6 +199,9 @@ class PaymentExtension extends DataExtension
         $finalChargeId = $chargeId ?: $transactionRef;
         $booking->markPaymentSuccessful($finalChargeId, $paymentIntentRef);
         
+        // Clear form session data after successful payment (handles 3DS completion case)
+        $this->clearBookingFormSession();
+        
         PaymentLogger::info('payment.captured', [
             'bookingID' => $booking->ID,
             'bookingCode' => $booking->Code,
@@ -205,6 +209,91 @@ class PaymentExtension extends DataExtension
             'transactionReference' => $finalChargeId,
             'paymentIntentReference' => $paymentIntentRef,
             'chargeExtracted' => !empty($chargeId),
+            'sessionCleared' => true,
         ]);
+    }
+    
+    /**
+     * Clear booking form session data to prevent form repopulation after successful payment
+     */
+    protected function clearBookingFormSession()
+    {
+        $session = Controller::curr()->getRequest()->getSession();
+        
+        // First, try to get the actual session key that was stored during form submission
+        $storedSessionKey = $session->get("BookingFormSessionKey");
+        
+        $cleared = 0;
+        $attemptedKeys = [];
+        
+        if ($storedSessionKey) {
+            // Clear the exact session key that was used
+            if ($session->get($storedSessionKey)) {
+                $session->clear($storedSessionKey);
+                $cleared++;
+                PaymentLogger::info('payment.session_data_cleared', [
+                    'sessionKey' => $storedSessionKey,
+                    'paymentID' => $this->owner->ID,
+                    'method' => 'stored_key',
+                ]);
+            }
+            
+            // Also clear the corresponding result key
+            $resultKey = str_replace('.data', '.result', $storedSessionKey);
+            if ($session->get($resultKey)) {
+                $session->clear($resultKey);
+                PaymentLogger::info('payment.session_result_cleared', [
+                    'sessionKey' => $resultKey,
+                    'paymentID' => $this->owner->ID,
+                    'method' => 'stored_key',
+                ]);
+            }
+            
+            // Clear the stored session key reference
+            $session->clear("BookingFormSessionKey");
+            
+            $attemptedKeys[] = $storedSessionKey;
+        } else {
+            // Fallback: try common form name patterns
+            $possibleFormNames = [
+                'BookingForm',
+                'TourBookingForm', 
+                'Form',
+                'TourBookingPageController_BookingForm',
+            ];
+            
+            foreach ($possibleFormNames as $formName) {
+                $dataKey = "FormInfo.{$formName}.data";
+                $resultKey = "FormInfo.{$formName}.result";
+                $attemptedKeys[] = $dataKey;
+                
+                if ($session->get($dataKey)) {
+                    $session->clear($dataKey);
+                    $cleared++;
+                    PaymentLogger::info('payment.session_data_cleared', [
+                        'sessionKey' => $dataKey,
+                        'paymentID' => $this->owner->ID,
+                        'method' => 'fallback_guess',
+                    ]);
+                }
+                
+                if ($session->get($resultKey)) {
+                    $session->clear($resultKey);
+                    PaymentLogger::info('payment.session_result_cleared', [
+                        'sessionKey' => $resultKey,
+                        'paymentID' => $this->owner->ID,
+                        'method' => 'fallback_guess',
+                    ]);
+                }
+            }
+        }
+        
+        if ($cleared === 0) {
+            PaymentLogger::info('payment.session_clear_no_data', [
+                'paymentID' => $this->owner->ID,
+                'attempted_keys' => $attemptedKeys,
+                'storedSessionKey' => $storedSessionKey,
+            ]);
+        }
     }
 }

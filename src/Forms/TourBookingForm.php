@@ -296,12 +296,28 @@ class TourBookingForm extends Form
 
         parent::__construct($controller, $name, $fieldList, $actions, $validator);
 
-        $oldData = Controller::curr()->getRequest()->getSession()->get("FormInfo.{$this->FormName()}.data");
+        $formName = $this->FormName();
+        $sessionKey = "FormInfo.{$formName}.data";
+        $oldData = Controller::curr()->getRequest()->getSession()->get($sessionKey);
+
+        // Debug logging to track session data loading
+        PaymentLogger::info('form.session_data_load', [
+            'formName' => $formName,
+            'sessionKey' => $sessionKey,
+            'hasSessionData' => !empty($oldData),
+            'sessionDataType' => $oldData ? gettype($oldData) : 'null',
+            'sessionDataKeys' => is_array($oldData) ? array_keys($oldData) : 'not_array',
+            'hasCurrentBooking' => !empty($this->currentBooking),
+        ]);
 
         $oldData = $oldData ?: $this->currentBooking;
 
         if ($oldData && (is_array($oldData) || is_object($oldData))) {
             $this->loadDataFrom($oldData);
+            PaymentLogger::info('form.data_loaded', [
+                'formName' => $formName,
+                'dataSource' => is_array($oldData) ? 'session' : 'currentBooking',
+            ]);
         }
 
         return $this;
@@ -322,6 +338,11 @@ class TourBookingForm extends Form
         ]);
         $newBooking = true;
         $this->saveDataToSession();
+        
+        // Store the actual form session key for later clearing (needed for 3DS flow)
+        $sessionKey = "FormInfo.{$this->FormName()}.data";
+        Controller::curr()->getRequest()->getSession()->set("BookingFormSessionKey", $sessionKey);
+        
         $data = Convert::raw2sql($data);
 
         if (isset($data['TourID']) && $data['TourID']) {
@@ -598,6 +619,9 @@ class TourBookingForm extends Form
 
         $redirect = $this->currentBooking->ConfirmLink();
 
+        // Clear session data after successful booking to prevent form repopulation
+        $this->clearFormState();
+
         PaymentLogger::info('booking.redirect.confirm', [
             'bookingID' => $this->currentBooking->ID,
             'bookingCode' => $this->currentBooking->Code,
@@ -612,9 +636,19 @@ class TourBookingForm extends Form
     public function saveDataToSession()
     {
         $data = $this->getData();
+        $sessionKey = "FormInfo.{$this->FormName()}.data";
 
-        Controller::curr()->getRequest()->getSession()->set("FormInfo.{$this->FormName()}.data", $data);
+        Controller::curr()->getRequest()->getSession()->set($sessionKey, $data);
+        
+        // Log the session save for debugging
+        PaymentLogger::info('form.session_data_save', [
+            'formName' => $this->FormName(),
+            'sessionKey' => $sessionKey,
+            'dataKeys' => is_array($data) ? array_keys($data) : 'not_array',
+        ]);
     }
+    
+
     
     /**
      * Check if payment is enabled in settings
