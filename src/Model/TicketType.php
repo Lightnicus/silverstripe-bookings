@@ -28,6 +28,7 @@ use SilverStripe\Forms\HiddenField;
  * @property bool $Active
  * @property int $SpotsKids
  * @property int $SpotsAdults
+ * @property int $SortOrder
  * @method ManyManyList|Booking[] Bookings()
  */
 class TicketType extends TourBaseClass
@@ -53,6 +54,7 @@ class TicketType extends TourBaseClass
         'Active' => 'Boolean',
         'SpotsKids' => 'Int',
         'SpotsAdults' => 'Int',
+        'SortOrder' => 'Int',
     ];
 
     private static $casting = [
@@ -71,7 +73,7 @@ class TicketType extends TourBaseClass
         'Active' => true,
     ];
 
-    private static $default_sort = 'Name ASC';
+    private static $default_sort = 'SortOrder ASC';
 
     private static $required_fields = [
         'Name',
@@ -238,12 +240,12 @@ class TicketType extends TourBaseClass
     public function validate()
     {
         $result = parent::validate();
-        
+
         $totalSpots = $this->getTotalSpots();
         if ($totalSpots < 1) {
             $result->addError('The sum of Kids Spots and Adult Spots must be at least 1.');
         }
-        
+
         return $result;
     }
 
@@ -313,7 +315,7 @@ class TicketType extends TourBaseClass
 
         // Add helpful information
         $fields->addFieldToTab('Root.Main', HeaderField::create('InfoHeader', 'Information', 4));
-        $fields->addFieldToTab('Root.Main', LiteralField::create('InfoText', 
+        $fields->addFieldToTab('Root.Main', LiteralField::create('InfoText',
             '<p><strong>Note:</strong> Only active ticket types will be available for customers to select during booking.</p>
             <p><strong>Important:</strong> The sum of Kids Spots and Adult Spots must be at least 1 for each ticket type.</p>'
         ));
@@ -328,7 +330,7 @@ class TicketType extends TourBaseClass
     protected function onBeforeWrite()
     {
         parent::onBeforeWrite();
-        
+
         // Ensure price is not negative
         if ($this->Price && $this->Price->getAmount() < 0) {
             $this->Price->setAmount(0);
@@ -351,7 +353,7 @@ class TicketType extends TourBaseClass
     protected function onBeforeDelete()
     {
         parent::onBeforeDelete();
-        
+
         // If there are bookings using this ticket type, don't allow deletion
         if ($this->Bookings()->count() > 0) {
             throw new \Exception('Cannot delete ticket type that has associated bookings.');
@@ -413,4 +415,4 @@ class TicketType extends TourBaseClass
             DB::alteration_message('Created default ticket types', 'created');
         }
     }
-} 
+}
