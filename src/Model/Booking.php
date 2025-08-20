@@ -85,7 +85,7 @@ class Booking extends TourBaseClass
     private static $table_name = 'Booking';
 
     private static $db = [
-        'Code' => 'Varchar(32)', // Full MD5 hash length
+        'Code' => 'Varchar(9)',
         'Date' => 'Date',
         'TotalNumberOfGuests' => 'Int',
         'InitiatingFirstName' => 'Varchar',
@@ -872,12 +872,12 @@ class Booking extends TourBaseClass
     }
 
     /**
-     * Get the shortened booking code (first 9 characters)
+     * Get the booking code (already 9 characters)
      * Used for URLs and public display
      */
     public function getShortCode(): string
     {
-        return $this->Code ? substr((string) $this->Code, 0, 9) : '';
+        return $this->Code ?: '';
     }
 
     protected function createLink(?string $action = ''): string
@@ -896,7 +896,7 @@ class Booking extends TourBaseClass
     {
         parent::onBeforeWrite();
         if (!$this->Code) {
-            $this->Code = hash('md5', uniqid());
+            $this->Code = substr(hash('md5', uniqid()), 0, 9);
         }
         $this->Date = $this->Tour()->Date;
     }

@@ -15,6 +15,7 @@ use SilverStripe\Forms\Form;
 use SilverStripe\Forms\FormAction;
 use SilverStripe\Forms\HeaderField;
 use SilverStripe\Forms\HiddenField;
+use SilverStripe\Forms\LiteralField;
 use SilverStripe\Forms\NumericField;
 use SilverStripe\Forms\TextField;
 use Sunnysideup\Bookings\Model\Booking;
@@ -198,7 +199,7 @@ class TourBookingForm extends Form
                     var cardEl = document.getElementById('card-element');
                     if (!cardEl) { return; }
                     card.mount(cardEl);
-                    
+
                     // Track card completion status
                     var cardComplete = false;
                     card.on('change', function(event) {
@@ -220,28 +221,28 @@ class TourBookingForm extends Form
                       var tokenInput = form.querySelector('input[name="stripeToken"]');
                       var stripeField = document.querySelector('.field--stripe');
                       var needsPayment = cardElement && stripeField && stripeField.style.display !== 'none' && cardElement.parentNode.style.display !== 'none';
-                      
+
                       // If payment element is not present, let the form submit normally
                       if (!needsPayment) { return; }
-                      
+
                       // If token is already set, let the form submit normally (avoid loops)
                       if (tokenInput && tokenInput.value) { return; }
-                      
+
                       // Prevent form submission to handle payment processing
                       e.preventDefault();
-                      
+
                       // Clear any previous errors
                       var errorEl = document.getElementById('card-errors');
-                      if (errorEl) { 
-                        errorEl.textContent = ''; 
+                      if (errorEl) {
+                        errorEl.textContent = '';
                         errorEl.style.display = 'none';
                       }
-                      
+
                       // Create Stripe token
                       stripe.createToken(card).then(function(result){
                         if (result.error) {
-                          if (errorEl) { 
-                            errorEl.textContent = result.error.message; 
+                          if (errorEl) {
+                            errorEl.textContent = result.error.message;
                             errorEl.style.display = 'block';
                           }
                           // Show validation error in the payment section
@@ -338,11 +339,11 @@ class TourBookingForm extends Form
         ]);
         $newBooking = true;
         $this->saveDataToSession();
-        
+
         // Store the actual form session key for later clearing (needed for 3DS flow)
         $sessionKey = "FormInfo.{$this->FormName()}.data";
         Controller::curr()->getRequest()->getSession()->set("BookingFormSessionKey", $sessionKey);
-        
+
         $data = Convert::raw2sql($data);
 
         if (isset($data['TourID']) && $data['TourID']) {
@@ -365,7 +366,7 @@ class TourBookingForm extends Form
         // Handle ticket types for new booking system
         $quantities = [];
         $totalGuests = 0;
-        
+
         // Parse ticket type quantities from form data
         foreach ($data as $fieldName => $value) {
             if (strpos($fieldName, 'TicketType_') === 0 && strpos($fieldName, '_Quantity') !== false) {
@@ -373,31 +374,31 @@ class TourBookingForm extends Form
                 if (count($parts) >= 3 && is_numeric($parts[1])) {
                     $ticketTypeId = (int) $parts[1];
                     $quantity = (int) $value;
-                    
+
                     if ($quantity > 0) {
                         $quantities[$ticketTypeId] = $quantity;
                     }
                 }
             }
         }
-        
+
         // Validate ticket types
         if (!empty($quantities)) {
             $totalAdults = 0;
             $totalKids = 0;
-            
+
             foreach ($quantities as $ticketTypeId => $quantity) {
                 $ticketType = \Sunnysideup\Bookings\Model\TicketType::get()->byID($ticketTypeId);
                 if ($ticketType) {
                     $adultsForThisType = $ticketType->SpotsAdults * $quantity;
                     $kidsForThisType = $ticketType->SpotsKids * $quantity;
-                    
+
                     $totalAdults += $adultsForThisType;
                     $totalKids += $kidsForThisType;
                     $totalGuests += $adultsForThisType + $kidsForThisType;
                 }
             }
-            
+
             // Validate: No children without adults
             if ($totalKids > 0 && $totalAdults === 0) {
                 PaymentLogger::error('booking.validation.fail', [
@@ -406,7 +407,7 @@ class TourBookingForm extends Form
                 $this->sessionError('Children must be with an adult.', 'bad');
                 return $this->controller->redirectBack();
             }
-            
+
             // Validate: At least one spot selected
             if ($totalGuests === 0) {
                 PaymentLogger::error('booking.validation.fail', [
@@ -442,7 +443,7 @@ class TourBookingForm extends Form
                 return $this->controller->redirectBack();
             }
         }
-        
+
         // Guest validations for unsaved objects (moved from Booking->validate())
         if ($totalGuests < 1) {
             PaymentLogger::error('booking.validation.fail', [
@@ -455,7 +456,7 @@ class TourBookingForm extends Form
             );
             return $this->controller->redirectBack();
         }
-        
+
         // Check for children without adults
         $totalKids = 0;
         if (!empty($quantities)) {
@@ -469,7 +470,7 @@ class TourBookingForm extends Form
             // Fallback to old system for NumberOfChildren
             $totalKids = (int) ($data['NumberOfChildren'] ?? 0);
         }
-        
+
         if ($totalKids > 0 && ($totalGuests - $totalKids) < 1) {
             $this->sessionError(
                 'You need to have at least one adult attending. It appears you only have children listed for this booking.',
@@ -477,7 +478,7 @@ class TourBookingForm extends Form
             );
             return $this->controller->redirectBack();
         }
-        
+
         // Validate peanut allergy confirmation
         if (!isset($data['PeanutAllergyConfirmation']) || !(bool) $data['PeanutAllergyConfirmation']) {
             PaymentLogger::error('booking.validation.fail', [
@@ -489,9 +490,9 @@ class TourBookingForm extends Form
             );
             return $this->controller->redirectBack();
         }
-        
+
         // Validate referral options
-        if (!isset($data['ReferralOptions']) || empty($data['ReferralOptions'])) {
+        if (empty($data['ReferralOptions'])) {
             PaymentLogger::error('booking.validation.fail', [
                 'reason' => 'no_referral_options',
             ]);
@@ -501,7 +502,7 @@ class TourBookingForm extends Form
             );
             return $this->controller->redirectBack();
         }
-        
+
         if ($this->currentBooking) {
             $newBooking = false;
             if (isset($data['ConfirmingEmail']) && $data['ConfirmingEmail'] === $this->currentBooking->InitiatingEmail) {
@@ -522,13 +523,13 @@ class TourBookingForm extends Form
         } else {
             $this->currentBooking = Booking::create();
         }
-        
+
         $form->saveInto($this->currentBooking);
-        
+
         // Update TotalNumberOfGuests to reflect the actual total from ticket types
         if (!empty($quantities)) {
             $this->currentBooking->TotalNumberOfGuests = $totalGuests;
-            
+
             // Calculate and set NumberOfChildren from ticket types
             $totalKids = 0;
             foreach ($quantities as $ticketTypeId => $quantity) {
@@ -539,7 +540,7 @@ class TourBookingForm extends Form
             }
             $this->currentBooking->NumberOfChildren = $totalKids;
         }
-        
+
         $validationObject = $this->currentBooking->validate($quantities);
         if (! $validationObject->isValid()) {
             foreach ($validationObject->getMessages() as $message) {
@@ -550,12 +551,12 @@ class TourBookingForm extends Form
 
             return $this->controller->redirectBack();
         }
-        
+
         // Save ticket types if any were selected
         if (!empty($quantities)) {
             $this->currentBooking->saveTicketTypes($quantities);
         }
-        
+
         if (isset($data['ReferralOptions'])) {
             foreach ($data['ReferralOptions'] as $referralOptionID) {
                 $referralOptionID = (int) $referralOptionID;
@@ -596,7 +597,7 @@ class TourBookingForm extends Form
                 $this->sessionError($paymentResult['message'], 'bad');
                 return $this->controller->redirectBack();
             }
-            
+
             // Handle 3D Secure redirect
             if (isset($paymentResult['redirect'])) {
                 PaymentLogger::info('payment.redirect', [
@@ -638,7 +639,7 @@ class TourBookingForm extends Form
         $sessionKey = "FormInfo.{$this->FormName()}.data";
 
         Controller::curr()->getRequest()->getSession()->set($sessionKey, $data);
-        
+
         // Log the session save for debugging
         PaymentLogger::info('form.session_data_save', [
             'formName' => $this->FormName(),
@@ -646,9 +647,9 @@ class TourBookingForm extends Form
             'dataKeys' => is_array($data) ? array_keys($data) : 'not_array',
         ]);
     }
-    
 
-    
+
+
     /**
      * Check if payment is enabled in settings
      */
@@ -656,14 +657,14 @@ class TourBookingForm extends Form
     {
         return TourBookingSettings::inst()->EnablePayments;
     }
-    
+
     /**
      * Process payment for booking
      */
     protected function processPayment(Booking $booking, array $data): array
     {
         $logger = Injector::inst()->get(LoggerInterface::class);
-        
+
         try {
             PaymentLogger::info('payment.create', [
                 'bookingID' => $booking->ID,
@@ -674,15 +675,15 @@ class TourBookingForm extends Form
             if (!$booking->validatePaymentAmount($paymentAmount)) {
                 throw new PaymentValidationException($booking->getAmountValidationError($paymentAmount));
             }
-            
+
             // Validation: Check payment token
             if (!isset($data['stripeToken']) || empty($data['stripeToken'])) {
                 throw new PaymentValidationException('Please enter your payment details to complete the booking.');
             }
-            
+
             // Get currency from configuration
             $currency = $booking->getPaymentCurrency();
-            
+
             // If amount due is zero, skip creating an Omnipay payment entirely
             if ($paymentAmount <= 0) {
                 return ['success' => true];
@@ -695,11 +696,11 @@ class TourBookingForm extends Form
                 ->setFailureUrl($this->controller->Link('paymentfailure') . '?booking=' . $booking->getShortCode());
 
             $payment->write();
-            
+
             // Link Payment to Booking
             $payment->BookingID = $booking->ID;
             $payment->write();
-            
+
             PaymentLogger::info('payment.persisted', [
                 'paymentID' => $payment->ID,
                 'paymentIdentifier' => $payment->Identifier,
@@ -708,14 +709,14 @@ class TourBookingForm extends Form
                 'currency' => $currency,
                 'bookingID' => $booking->ID,
             ]);
-            
+
             // Process payment with Stripe token using Payment Intents API for better 3DS support
             $service = ServiceFactory::create()->getService($payment, ServiceFactory::INTENT_PURCHASE);
             PaymentLogger::info('payment.gateway.request', [
                 'paymentID' => $payment->ID,
                 'token_present' => isset($data['stripeToken']) && !empty($data['stripeToken']),
             ]);
-            
+
             // Force 3DS testing by using Payment Intents API with specific parameters
             $response = $service->initiate([
                 'token' => $data['stripeToken'],
@@ -728,19 +729,19 @@ class TourBookingForm extends Form
                     'force_3ds_test' => 'true'
                 ]
             ]);
-            
+
             if ($response->isSuccessful()) {
                 // Get Payment Intent ID for admin display
                 $omnipayResponse = $response->getOmnipayResponse();
-                $paymentIntentRef = $omnipayResponse && method_exists($omnipayResponse, 'getPaymentIntentReference') 
-                    ? $omnipayResponse->getPaymentIntentReference() 
+                $paymentIntentRef = $omnipayResponse && method_exists($omnipayResponse, 'getPaymentIntentReference')
+                    ? $omnipayResponse->getPaymentIntentReference()
                     : null;
-                
+
                 if ($paymentIntentRef) {
                     $payment->PaymentIntentId = $paymentIntentRef;
                     $payment->write();
                 }
-                
+
                 PaymentLogger::info('payment.gateway.success', [
                     'paymentID' => $payment->ID,
                     'paymentIntentReference' => $paymentIntentRef,
@@ -751,15 +752,15 @@ class TourBookingForm extends Form
             } elseif ($response->isRedirect()) {
                 // Get Payment Intent ID for admin display and 3DS completion
                 $omnipayResponse = $response->getOmnipayResponse();
-                $paymentIntentRef = $omnipayResponse && method_exists($omnipayResponse, 'getPaymentIntentReference') 
-                    ? $omnipayResponse->getPaymentIntentReference() 
+                $paymentIntentRef = $omnipayResponse && method_exists($omnipayResponse, 'getPaymentIntentReference')
+                    ? $omnipayResponse->getPaymentIntentReference()
                     : null;
-                
+
                 if ($paymentIntentRef) {
                     $payment->PaymentIntentId = $paymentIntentRef;
                     $payment->write();
                 }
-                
+
                 PaymentLogger::info('payment.gateway.redirect', [
                     'paymentID' => $payment->ID,
                     'redirectUrl' => $response->getTargetUrl(),
@@ -777,7 +778,7 @@ class TourBookingForm extends Form
                 ]);
                 throw new PaymentProcessingException('Payment failed: ' . $msg);
             }
-            
+
         } catch (PaymentValidationException $e) {
             $logger->warning('Payment validation error for booking ' . $booking->Code, [
                 'booking_id' => $booking->ID,
@@ -789,7 +790,7 @@ class TourBookingForm extends Form
                 'message' => $e->getAdminMessage(),
             ]);
             return ['success' => false, 'message' => $e->getUserMessage()];
-            
+
         } catch (PaymentGatewayException $e) {
             $logger->error('Payment gateway error for booking ' . $booking->Code, [
                 'booking_id' => $booking->ID,
@@ -801,7 +802,7 @@ class TourBookingForm extends Form
                 'message' => $e->getAdminMessage(),
             ]);
             return ['success' => false, 'message' => $e->getUserMessage()];
-            
+
         } catch (PaymentProcessingException $e) {
             $logger->error('Payment processing error for booking ' . $booking->Code, [
                 'booking_id' => $booking->ID,
@@ -813,7 +814,7 @@ class TourBookingForm extends Form
                 'message' => $e->getAdminMessage(),
             ]);
             return ['success' => false, 'message' => $e->getUserMessage()];
-            
+
         } catch (Exception $e) {
             // Catch-all for unexpected errors - log but don't expose details
             $logger->critical('Unexpected payment error for booking ' . $booking->Code, [
@@ -827,7 +828,7 @@ class TourBookingForm extends Form
                 'message' => $e->getMessage(),
             ]);
             return [
-                'success' => false, 
+                'success' => false,
                 'message' => 'Payment processing failed. Please check your payment details and try again.'
             ];
         }
