@@ -17,6 +17,7 @@ use SilverStripe\ORM\DataObject;
 use SilverStripe\ORM\DB;
 use SilverStripe\ORM\FieldType\DBMoney;
 use SilverStripe\ORM\ValidationException;
+use SilverStripe\Forms\HiddenField;
 
 /**
  * Class \Sunnysideup\Bookings\Model\TicketType
@@ -174,7 +175,7 @@ class TicketType extends TourBaseClass
     /**
      * Get all active ticket types
      */
-    public static function getActive()
+    public static function getActiveTicketTypes()
     {
         return self::get()->filter(['Active' => true]);
     }
@@ -245,8 +246,6 @@ class TicketType extends TourBaseClass
         
         return $result;
     }
-
-
 
     //######################
     //## Permissions Section
