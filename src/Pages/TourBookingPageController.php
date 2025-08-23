@@ -803,6 +803,22 @@ class TourBookingPageController extends PageController
         $sigHeader = $request->getHeader('Stripe-Signature');
         $endpointSecret = Environment::getEnv('STRIPE_WEBHOOK_SECRET');
 
+            // EXTENDED LOGGING: Log webhook request details for debugging
+            PaymentLogger::info('payment.webhook.request_details', [
+                'payload_length' => strlen($payload),
+                'payload_preview' => substr($payload, 0, 200) . (strlen($payload) > 200 ? '...' : ''),
+                'signature_header_present' => !empty($sigHeader),
+                'signature_header_length' => strlen($sigHeader ?? ''),
+                'signature_header_preview' => substr($sigHeader ?? '', 0, 50) . (strlen($sigHeader ?? '') > 50 ? '...' : ''),
+                'endpoint_secret_present' => !empty($endpointSecret),
+                'endpoint_secret_length' => strlen($endpointSecret ?? ''),
+                'endpoint_secret_preview' => substr($endpointSecret ?? '', 0, 10) . (strlen($endpointSecret ?? '') > 10 ? '...' : ''),
+                'content_type' => $request->getHeader('Content-Type'),
+                'user_agent' => $request->getHeader('User-Agent'),
+                'request_method' => $request->httpMethod(),
+                'request_url' => $request->getURL(),
+            ]);
+
             // SECURITY: Always require webhook secret
             if (!$endpointSecret) {
                 $logger->error('Webhook endpoint called without STRIPE_WEBHOOK_SECRET configured');
@@ -815,12 +831,30 @@ class TourBookingPageController extends PageController
                 $logger->warning('Invalid webhook payload received', ['error' => $e->getMessage()]);
                 PaymentLogger::error('payment.webhook.invalid_payload', [
                     'message' => $e->getMessage(),
+                    'exception_class' => get_class($e),
+                    'payload_length' => strlen($payload),
+                    'payload_preview' => substr($payload, 0, 500) . (strlen($payload) > 500 ? '...' : ''),
+                    'json_last_error' => json_last_error(),
+                    'json_last_error_msg' => json_last_error_msg(),
+                    'content_type' => $request->getHeader('Content-Type'),
+                    'user_agent' => $request->getHeader('User-Agent'),
+                    'request_method' => $request->httpMethod(),
+                    'request_url' => $request->getURL(),
                 ]);
                 return $this->httpError(400, 'Invalid payload');
             } catch(\Stripe\Exception\SignatureVerificationException $e) {
                 $logger->warning('Invalid webhook signature received', ['error' => $e->getMessage()]);
                 PaymentLogger::error('payment.webhook.invalid_signature', [
                     'message' => $e->getMessage(),
+                    'exception_class' => get_class($e),
+                    'payload_length' => strlen($payload),
+                    'payload_is_json' => json_decode($payload) !== null,
+                    'signature_header_present' => !empty($sigHeader),
+                    'endpoint_secret_present' => !empty($endpointSecret),
+                    'content_type' => $request->getHeader('Content-Type'),
+                    'user_agent' => $request->getHeader('User-Agent'),
+                    'request_method' => $request->httpMethod(),
+                    'request_url' => $request->getURL(),
                 ]);
                 return $this->httpError(400, 'Invalid signature');
             }
