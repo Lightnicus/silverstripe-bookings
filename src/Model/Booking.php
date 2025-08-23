@@ -203,7 +203,6 @@ class Booking extends TourBaseClass
         'Tour.Date.Short' => 'Date',
         'Tour.StartTime.Short' => 'Time',
         'Created.Short' => 'Created',
-        'LastEdited.Ago' => 'Edited',
         'Code' => 'Reference',
         'getTotalSpots' => 'Total Spots',
         'getNumberOfAdults' => 'Adults',
@@ -211,9 +210,6 @@ class Booking extends TourBaseClass
         'getTicketTypesSummary' => 'Ticket Types',
         'InitiatingEmail' => 'Email',
         'PrimaryPhone' => 'Phone 1',
-        'SecondaryPhone' => 'Phone 2',
-        'CityTown ' => 'City',
-        'CountryOfOrigin ' => 'Country',
     ];
 
     private static $casting = [
