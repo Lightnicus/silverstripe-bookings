@@ -825,6 +825,44 @@ class TourBookingPageController extends PageController
                 return $this->httpError(400, 'Webhook secret required');
             }
 
+            // LOG THE EXACT PAYLOAD BEING PASSED TO STRIPE
+            PaymentLogger::info('payment.webhook.stripe_verification_input', [
+                'payload_exact' => $payload,
+                'payload_length' => strlen($payload),
+                'payload_hash' => hash('sha256', $payload),
+                'signature_header_exact' => $sigHeader,
+                'endpoint_secret_preview' => substr($endpointSecret, 0, 10) . '...',
+            ]);
+
+            // MANUAL SIGNATURE VERIFICATION FOR DEBUGGING
+            $signatureParts = explode(',', $sigHeader);
+            $timestamp = null;
+            $signature = null;
+            
+            foreach ($signatureParts as $part) {
+                $keyValue = explode('=', $part, 2);
+                if (count($keyValue) === 2) {
+                    if ($keyValue[0] === 't') {
+                        $timestamp = $keyValue[1];
+                    } elseif ($keyValue[0] === 'v1') {
+                        $signature = $keyValue[1];
+                    }
+                }
+            }
+            
+            if ($timestamp && $signature) {
+                $signedPayload = $timestamp . '.' . $payload;
+                $expectedSignature = hash_hmac('sha256', $signedPayload, $endpointSecret);
+                
+                PaymentLogger::info('payment.webhook.manual_signature_check', [
+                    'timestamp' => $timestamp,
+                    'signature_received' => $signature,
+                    'signature_expected' => $expectedSignature,
+                    'signatures_match' => hash_equals($expectedSignature, $signature),
+                    'signed_payload_length' => strlen($signedPayload),
+                ]);
+            }
+
             try {
                 $event = \Stripe\Webhook::constructEvent($payload, $sigHeader, $endpointSecret);
             } catch(\UnexpectedValueException $e) {
@@ -967,7 +1005,8 @@ class TourBookingPageController extends PageController
                 'booking_code' => $booking->Code,
                 'event_id' => $eventId
             ]);
-            return false;
+            // Return true for replay detection - this is not an error, just a duplicate
+            return true;
         }
 
         // Use centralized payment status method
@@ -1051,7 +1090,8 @@ class TourBookingPageController extends PageController
                 'booking_code' => $booking->Code,
                 'event_id' => $eventId
             ]);
-            return false;
+            // Return true for replay detection - this is not an error, just a duplicate
+            return true;
         }
 
         // Use centralized payment status method
