@@ -928,10 +928,23 @@ class TourBookingPageController extends PageController
     {
         $logger = Injector::inst()->get(LoggerInterface::class);
 
+        PaymentLogger::info('payment.webhook.handle_success.start', [
+            'payment_intent_id' => $paymentIntent->id,
+            'event_id' => $eventId,
+            'event_timestamp' => $eventTimestamp,
+        ]);
+
         // Find booking by payment intent ID
         $booking = Booking::get()
             ->filter('PaymentIntentId', $paymentIntent->id)
             ->first();
+
+        PaymentLogger::info('payment.webhook.booking_lookup', [
+            'payment_intent_id' => $paymentIntent->id,
+            'booking_found' => !empty($booking),
+            'booking_id' => $booking ? $booking->ID : null,
+            'booking_code' => $booking ? $booking->Code : null,
+        ]);
 
         if (!$booking) {
             $logger->warning('Webhook payment success: booking not found', [
@@ -941,6 +954,14 @@ class TourBookingPageController extends PageController
         }
 
         // REPLAY PROTECTION: Check if this event should be processed
+        PaymentLogger::info('payment.webhook.replay_check', [
+            'booking_id' => $booking->ID,
+            'booking_code' => $booking->Code,
+            'event_id' => $eventId,
+            'event_timestamp' => $eventTimestamp,
+            'should_process' => $eventId && $eventTimestamp ? $booking->shouldProcessWebhookEvent($eventId, $eventTimestamp) : 'no_check_needed',
+        ]);
+
         if ($eventId && $eventTimestamp && !$booking->shouldProcessWebhookEvent($eventId, $eventTimestamp)) {
             $logger->info('Webhook replay detected for payment success', [
                 'booking_code' => $booking->Code,
@@ -950,11 +971,52 @@ class TourBookingPageController extends PageController
         }
 
         // Use centralized payment status method
-        $booking->markPaymentSuccessful($paymentIntent->id, $paymentIntent->id);
+        PaymentLogger::info('payment.webhook.mark_payment_successful.start', [
+            'booking_id' => $booking->ID,
+            'booking_code' => $booking->Code,
+            'payment_intent_id' => $paymentIntent->id,
+        ]);
+
+        try {
+            $booking->markPaymentSuccessful($paymentIntent->id, $paymentIntent->id);
+            PaymentLogger::info('payment.webhook.mark_payment_successful.complete', [
+                'booking_id' => $booking->ID,
+                'booking_code' => $booking->Code,
+            ]);
+        } catch (Exception $e) {
+            PaymentLogger::error('payment.webhook.mark_payment_successful.error', [
+                'booking_id' => $booking->ID,
+                'booking_code' => $booking->Code,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+            throw $e;
+        }
 
         // Mark event as processed
         if ($eventId && $eventTimestamp) {
-            $booking->markWebhookProcessed($eventId, $eventTimestamp);
+            PaymentLogger::info('payment.webhook.mark_processed.start', [
+                'booking_id' => $booking->ID,
+                'booking_code' => $booking->Code,
+                'event_id' => $eventId,
+                'event_timestamp' => $eventTimestamp,
+            ]);
+
+            try {
+                $booking->markWebhookProcessed($eventId, $eventTimestamp);
+                PaymentLogger::info('payment.webhook.mark_processed.complete', [
+                    'booking_id' => $booking->ID,
+                    'booking_code' => $booking->Code,
+                ]);
+            } catch (Exception $e) {
+                PaymentLogger::error('payment.webhook.mark_processed.error', [
+                    'booking_id' => $booking->ID,
+                    'booking_code' => $booking->Code,
+                    'error' => $e->getMessage(),
+                    'trace' => $e->getTraceAsString(),
+                ]);
+                throw $e;
+            }
         }
 
         $logger->info('Payment success processed via webhook', [
