@@ -505,21 +505,8 @@ class TourBookingForm extends Form
 
         if ($this->currentBooking) {
             $newBooking = false;
-            if (isset($data['ConfirmingEmail']) && $data['ConfirmingEmail'] === $this->currentBooking->InitiatingEmail) {
-                //do nothing
-            } else {
-                $settings = TourBookingSettings::inst();
-                $email = $settings->Administrator()->Email;
-                PaymentLogger::error('booking.update.fail', [
-                    'reason' => 'confirming_email_mismatch',
-                ]);
-                $this->sessionError(
-                    'You need to enter the same email address used to create the original booking, please try again or contact the tour manager for assistance: ' . $email,
-                    'bad'
-                );
-
-                return $this->controller->redirectBack();
-            }
+            // Skip email validation for update bookings since the email field is hidden
+            // The email will remain unchanged from the original booking
         } else {
             $this->currentBooking = Booking::create();
         }

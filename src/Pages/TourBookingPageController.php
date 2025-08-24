@@ -293,7 +293,8 @@ class TourBookingPageController extends PageController
             $this->Content = $this->RenderWith('Sunnysideup/Bookings/Includes/BookingCancellationContent');
         } else {
             $this->Title = 'Update your booking';
-            $this->Form = $this->RenderWith('Sunnysideup/Bookings/Includes/UpdateBookingContent');
+            $this->Content = $this->RenderWith('Sunnysideup/Bookings/Includes/UpdateBookingContent');
+//            $this->Content = '';
         }
 
         if ($this->IsOnLocation()) {
@@ -746,7 +747,9 @@ class TourBookingPageController extends PageController
         foreach ($tours as $tour) {
             $calculatedNumberOfPlacesRequested = $numberOfPlacesRequested;
             if ($tour->ID === $myTourID) {
-                $calculatedNumberOfPlacesRequested = $numberOfPlacesRequested - $this->currentBooking->TotalNumberOfGuests;
+                // Fix: Get the actual value from DBInt field before arithmetic operation
+                $currentBookingGuests = (int) $this->currentBooking->getField('TotalNumberOfGuests');
+                $calculatedNumberOfPlacesRequested = $numberOfPlacesRequested - $currentBookingGuests;
             }
             if (0 === $tour->getNumberOfPlacesAvailable()->Value && $calculatedNumberOfPlacesRequested > 0) {
                 $availability = 'Full';
