@@ -3,6 +3,7 @@
 namespace Sunnysideup\Bookings\Pages;
 
 use PageController;
+use SilverStripe\Control\HTTPRequest;
 use SilverStripe\Core\Config\Config;
 use SilverStripe\Core\Convert;
 use SilverStripe\Core\Injector\Injector;
@@ -65,7 +66,7 @@ class TourBookingPageController extends PageController
 
         //edit
         'BookingCancellationForm' => true,
-        'update' => '->canEdit',
+        'update' => true,
         'cancel' => true,
 
         //waiting list
@@ -149,7 +150,7 @@ class TourBookingPageController extends PageController
 
     public function BookingForm($request = null)
     {
-        $this->getBookingFromRequestOrIDParam();
+        $this->currentBooking = $this->getBookingFromRequestOrIDParam();
 
         $form = TourBookingForm::create($this, 'BookingForm', $this->currentBooking);
 
@@ -292,7 +293,7 @@ class TourBookingPageController extends PageController
             $this->Content = $this->RenderWith('Sunnysideup/Bookings/Includes/BookingCancellationContent');
         } else {
             $this->Title = 'Update your booking';
-            $this->Content = $this->RenderWith('Sunnysideup/Bookings/Includes/UpdateBookingContent');
+            $this->Form = $this->RenderWith('Sunnysideup/Bookings/Includes/UpdateBookingContent');
         }
 
         if ($this->IsOnLocation()) {
@@ -657,7 +658,7 @@ class TourBookingPageController extends PageController
             ',
             'TourBookingsInPageData'
         );
-        $this->getBookingFromRequestOrIDParam();
+        $this->currentBooking = $this->getBookingFromRequestOrIDParam();
     }
 
     //######################
@@ -666,8 +667,8 @@ class TourBookingPageController extends PageController
 
     protected function getBookingFromRequestOrIDParam(): ?Booking
     {
-        $this->currentBooking = null;
-        $code = '';
+        $currentBooking = null;
+
         if ($code = $this->request->postVar('BookingCode')) {
             $code = Convert::raw2sql($code);
         } else {
@@ -678,10 +679,10 @@ class TourBookingPageController extends PageController
             if ($count > 1) {
                 user_error('There are duplicate bookings with the same Boooking Code');
             }
-            $this->currentBooking = Booking::get()->filter(['Code' => $code])->last();
+            $currentBooking = Booking::get()->filter(['Code' => $code])->last();
         }
 
-        return $this->currentBooking;
+        return $currentBooking;
     }
 
     protected function getTourFromRequestOrIDParam(): ?Tour
@@ -838,7 +839,7 @@ class TourBookingPageController extends PageController
             $signatureParts = explode(',', $sigHeader);
             $timestamp = null;
             $signature = null;
-            
+
             foreach ($signatureParts as $part) {
                 $keyValue = explode('=', $part, 2);
                 if (count($keyValue) === 2) {
@@ -849,11 +850,11 @@ class TourBookingPageController extends PageController
                     }
                 }
             }
-            
+
             if ($timestamp && $signature) {
                 $signedPayload = $timestamp . '.' . $payload;
                 $expectedSignature = hash_hmac('sha256', $signedPayload, $endpointSecret);
-                
+
                 PaymentLogger::info('payment.webhook.manual_signature_check', [
                     'timestamp' => $timestamp,
                     'signature_received' => $signature,

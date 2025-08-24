@@ -491,8 +491,8 @@ class TourBookingForm extends Form
             return $this->controller->redirectBack();
         }
 
-        // Validate referral options
-        if (empty($data['ReferralOptions'])) {
+        // Validate referral options only for new bookings (update forms may hide this field)
+        if (empty($data['ReferralOptions']) && !$this->currentBooking) {
             PaymentLogger::error('booking.validation.fail', [
                 'reason' => 'no_referral_options',
             ]);
