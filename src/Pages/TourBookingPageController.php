@@ -293,8 +293,8 @@ class TourBookingPageController extends PageController
             $this->Content = $this->RenderWith('Sunnysideup/Bookings/Includes/BookingCancellationContent');
         } else {
             $this->Title = 'Update your booking';
-            $this->Content = $this->RenderWith('Sunnysideup/Bookings/Includes/UpdateBookingContent');
-//            $this->Content = '';
+            $this->Form = $this->RenderWith('Sunnysideup/Bookings/Includes/UpdateBookingContent');
+            $this->Content = '';
         }
 
         if ($this->IsOnLocation()) {

@@ -38,12 +38,46 @@ class BookingPaymentExtension extends DataExtension
     
     public function requiresPayment(): bool
     {
-        return $this->owner->getTotalPriceFromTicketTypes() > 0;
+        $newTotal = $this->owner->getTotalPriceFromTicketTypes();
+        
+        // For booking updates, check if there's actually an amount due
+        if ($this->owner->ID && $this->owner->exists()) {
+            $totalAmountPaid = 0;
+            $payments = $this->owner->Payments();
+            foreach ($payments as $payment) {
+                if ($payment->Status === 'Captured' || $payment->Status === 'Authorized') {
+                    $totalAmountPaid += $payment->Money->getAmount();
+                }
+            }
+            return ($newTotal - $totalAmountPaid) > 0;
+        }
+        
+        // For new bookings, require payment if there's a total
+        return $newTotal > 0;
     }
     
     public function getPaymentAmount(): float
     {
-        return $this->requiresPayment() ? $this->owner->getTotalPriceFromTicketTypes() : 0;
+        if (!$this->requiresPayment()) {
+            return 0;
+        }
+        
+        $newTotal = $this->owner->getTotalPriceFromTicketTypes();
+        
+        // For booking updates, calculate the difference between new total and amount already paid
+        if ($this->owner->ID && $this->owner->exists()) {
+            $totalAmountPaid = 0;
+            $payments = $this->owner->Payments();
+            foreach ($payments as $payment) {
+                if ($payment->Status === 'Captured' || $payment->Status === 'Authorized') {
+                    $totalAmountPaid += $payment->Money->getAmount();
+                }
+            }
+            return max(0, $newTotal - $totalAmountPaid);
+        }
+        
+        // For new bookings, return the full amount
+        return $newTotal;
     }
     
     public function isPaymentComplete(): bool
@@ -101,10 +135,10 @@ class BookingPaymentExtension extends DataExtension
      */
     public function validatePaymentAmount(float $paymentAmount): bool
     {
-        $currentTotal = $this->owner->getTotalPriceFromTicketTypes();
+        $expectedAmount = $this->getPaymentAmount();
         $tolerance = 0.01; // Allow for floating point precision issues
         
-        return abs($currentTotal - $paymentAmount) <= $tolerance;
+        return abs($expectedAmount - $paymentAmount) <= $tolerance;
     }
 
     /**
@@ -115,10 +149,10 @@ class BookingPaymentExtension extends DataExtension
      */
     public function getAmountValidationError(float $attemptedAmount): string
     {
-        $currentTotal = $this->owner->getTotalPriceFromTicketTypes();
+        $expectedAmount = $this->getPaymentAmount();
         return sprintf(
             'Payment amount mismatch. Expected: $%.2f, Attempted: $%.2f. Please refresh and try again.',
-            $currentTotal,
+            $expectedAmount,
             $attemptedAmount
         );
     }
