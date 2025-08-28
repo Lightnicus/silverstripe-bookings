@@ -40,6 +40,7 @@ use Sunnysideup\SanitiseClassName\Sanitiser;
  * @property string $WaitlistSuccessMessage
  * @property bool $EnablePayments
  * @property string $PaymentGateway
+ * @property string $PaymentInfoMessage
  * @property int $AdministratorID
  * @property int $BookingConfirmationEmailID
  * @property int $UpdateConfirmationEmailID
@@ -87,6 +88,7 @@ class TourBookingSettings extends TourBaseClass
         'WaitlistSuccessMessage' => 'Text',
         'EnablePayments' => 'Boolean',
         'PaymentGateway' => 'Varchar(50)',
+        'PaymentInfoMessage' => 'HTMLText',
     ];
 
     private static $has_one = [
@@ -419,6 +421,8 @@ class TourBookingSettings extends TourBaseClass
                 DropdownField::create('PaymentGateway', 'Payment Gateway', [
                     'Stripe' => 'Stripe',
                 ]),
+                HTMLEditorField::create('PaymentInfoMessage', 'Payment Info Message')
+                    ->setDescription('Message displayed to the customer before they are redirected to the payment page'),
                 LiteralField::create(
                     'StripeKeysInfo',
                     '<div class="field text">
