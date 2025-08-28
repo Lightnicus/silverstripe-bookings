@@ -708,12 +708,12 @@ class TourBookingForm extends Form
             $response = $service->initiate([
                 'token' => $data['stripeToken'],
                 'description' => 'Booking: ' . $booking->Code,
+                'receipt_email' => $booking->InitiatingEmail, // Add receipt email
                 'confirm' => true, // Force immediate confirmation which triggers 3DS if needed
                 'setupFutureUsage' => 'off_session', // This can trigger 3DS
                 'metadata' => [
                     'booking_id' => $booking->ID,
-                    'booking_code' => $booking->Code,
-                    'force_3ds_test' => 'true'
+                    'booking_code' => $booking->Code
                 ]
             ]);
 
