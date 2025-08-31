@@ -594,6 +594,16 @@ class TourBookingForm extends Form
                 ]);
                 return $this->controller->redirect($paymentResult['redirect']);
             }
+        } else {
+            // For free bookings (no payment required), mark as paid
+            if (!$this->currentBooking->requiresPayment()) {
+                PaymentLogger::info('booking.free_booking_mark_paid', [
+                    'bookingID' => $this->currentBooking->ID,
+                    'bookingCode' => $this->currentBooking->Code,
+                    'reason' => 'no_payment_required',
+                ]);
+                $this->currentBooking->updatePaymentStatus('Paid');
+            }
         }
 
         if ($newBooking) {
