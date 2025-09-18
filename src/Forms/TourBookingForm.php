@@ -7,6 +7,7 @@ use SilverStripe\Control\HTTPRequest;
 use SilverStripe\Core\Config\Config;
 use SilverStripe\Core\Convert;
 use SilverStripe\Core\Injector\Injector;
+use SilverStripe\Security\Security;
 use SilverStripe\Forms\CheckboxSetField;
 use SilverStripe\Forms\CompositeField;
 use SilverStripe\Forms\EmailField;
@@ -597,12 +598,31 @@ class TourBookingForm extends Form
         } else {
             // For free bookings (no payment required), mark as paid
             if (!$this->currentBooking->requiresPayment()) {
-                PaymentLogger::info('booking.free_booking_mark_paid', [
-                    'bookingID' => $this->currentBooking->ID,
-                    'bookingCode' => $this->currentBooking->Code,
-                    'reason' => 'no_payment_required',
-                ]);
-                $this->currentBooking->updatePaymentStatus('Paid');
+                if ($this->currentBooking->isOfflinePaymentUser()) {
+                    // Offline payment user - set specific payment details
+                    $member = Security::getCurrentUser();
+                    $userEmail = $member ? $member->Email : 'unknown@offline.local';
+                    
+                    PaymentLogger::info('booking.offline_payment_mark_paid', [
+                        'bookingID' => $this->currentBooking->ID,
+                        'bookingCode' => $this->currentBooking->Code,
+                        'userEmail' => $userEmail,
+                        'reason' => 'offline_payment_user',
+                    ]);
+                    
+                    $this->currentBooking->updatePaymentStatus('Paid', [
+                        'gateway' => 'Offline',
+                        'reference' => $userEmail,
+                    ]);
+                } else {
+                    // Regular free booking
+                    PaymentLogger::info('booking.free_booking_mark_paid', [
+                        'bookingID' => $this->currentBooking->ID,
+                        'bookingCode' => $this->currentBooking->Code,
+                        'reason' => 'no_payment_required',
+                    ]);
+                    $this->currentBooking->updatePaymentStatus('Paid');
+                }
             }
         }
 

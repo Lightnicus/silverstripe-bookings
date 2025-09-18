@@ -4,6 +4,7 @@ namespace Sunnysideup\Bookings\Extensions;
 
 use SilverStripe\ORM\DataExtension;
 use SilverStripe\Core\Config\Config;
+use SilverStripe\Security\Security;
 use Sunnysideup\Bookings\Model\TourBookingSettings;
 use Sunnysideup\Bookings\Model\PaymentConstants;
 
@@ -38,6 +39,11 @@ class BookingPaymentExtension extends DataExtension
     
     public function requiresPayment(): bool
     {
+        // If user is eligible for offline payment, no payment required
+        if ($this->isOfflinePaymentUser()) {
+            return false;
+        }
+        
         $newTotal = $this->owner->getTotalPriceFromTicketTypes();
         
         // For booking updates, check if there's actually an amount due
@@ -90,6 +96,26 @@ class BookingPaymentExtension extends DataExtension
         return !$this->requiresPayment() || $this->isPaymentComplete();
     }
     
+    /**
+     * Check if current user is eligible for offline payment
+     * 
+     * @return bool
+     */
+    public function isOfflinePaymentUser(): bool
+    {
+        $member = Security::getCurrentUser();
+        if (!$member) {
+            return false;
+        }
+        
+        $offlineGroupCode = Config::inst()->get(self::class, 'offline_payment_user_group');
+        if (!$offlineGroupCode) {
+            return false;
+        }
+        
+        return $member->inGroup($offlineGroupCode);
+    }
+    
     public function updatePaymentStatus(string $status, array $paymentData = []): void
     {
         $this->owner->PaymentStatus = $status;
@@ -110,6 +136,11 @@ class BookingPaymentExtension extends DataExtension
     
     public function getPaymentStatusLabel(): string
     {
+        // For offline payments, show "Offline" instead of "Payment Complete"
+        if ($this->owner->PaymentStatus === 'Paid' && $this->owner->PaymentGateway === 'Offline') {
+            return 'Offline';
+        }
+        
         $labels = [
             'Pending' => 'Awaiting Payment',
             'Paid' => 'Payment Complete',
@@ -117,8 +148,10 @@ class BookingPaymentExtension extends DataExtension
             'Refunded' => 'Payment Refunded',
             'Cancelled' => 'Payment Cancelled',
         ];
+        
         return $labels[$this->owner->PaymentStatus] ?? $this->owner->PaymentStatus;
     }
+    
     
     public function getPaymentByIntentId(string $paymentIntentId)
     {
