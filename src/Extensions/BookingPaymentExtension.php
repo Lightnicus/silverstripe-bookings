@@ -151,6 +151,11 @@ class BookingPaymentExtension extends DataExtension
         
         return $labels[$this->owner->PaymentStatus] ?? $this->owner->PaymentStatus;
     }
+
+    public function getPaymentCheckinLabel(): string
+    {
+        return $this->getPaymentStatusLabel() === 'Offline' ? 'Walk In' : 'Online';
+    }
     
     
     public function getPaymentByIntentId(string $paymentIntentId)

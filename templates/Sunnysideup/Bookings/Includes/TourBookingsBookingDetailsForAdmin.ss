@@ -12,7 +12,7 @@
         <% end_with %>
 
         <dd>Booking code:</dd>
-            <dt>$Code</dt>
+            <dt>$Code ($PaymentCheckinLabel)</dt>
 
         <dd>Contact:</dd>
             <dt>$InitiatingFirstName</dt>
@@ -25,6 +25,9 @@
 
         <dd>Total number of guests:</dd>
             <dt>$TotalNumberOfGuests<% if $NumberOfChildren %>, $NumberOfAdults adults and $NumberOfChildren child / children<% else %>, all adults<% end_if %></dt>
+            
+        <dd>Ticket Types:</dd>    
+        <dt>$TicketTypesSummary</dt>
 
         <% if $SpecialAssistanceRequired %>
         <dd>Assistance Requested:</dd>
