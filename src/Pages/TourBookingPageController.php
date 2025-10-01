@@ -484,19 +484,99 @@ class TourBookingPageController extends PageController
 
     public function TourDateAsArray(): array
     {
-        $tours = $this->ListOfTours();
+        // Get tours with basic filtering
+        $tours = Tour::get()
+            ->filter([
+                'Date:GreaterThanOrEqual' => $this->listOfToursFromDate,
+                'Date:LessThanOrEqual' => $this->listOfToursUntilDate,
+            ])
+            ->sort('Date ASC, StartTime ASC, ID ASC');
+
+        // Pre-load ALL booking data to avoid N+1 queries
+        $tourIds = $tours->column('ID');
+        $bookingData = [];
+        if (!empty($tourIds)) {
+            $bookings = Booking::get()
+                ->filter([
+                    'TourID' => $tourIds,
+                    'Cancelled' => 0
+                ]);
+            
+            // Group booking data by TourID with detailed statistics
+            foreach ($bookings as $booking) {
+                $tourId = $booking->TourID;
+                if (!isset($bookingData[$tourId])) {
+                    $bookingData[$tourId] = [
+                        'count' => 0,
+                        'totalGuests' => 0,
+                        'adults' => 0,
+                        'children' => 0
+                    ];
+                }
+                $bookingData[$tourId]['count']++;
+                
+                // Extract raw values from DBField objects
+                $totalGuests = $booking->TotalNumberOfGuests;
+                if ($totalGuests instanceof \SilverStripe\ORM\FieldType\DBField) {
+                    $totalGuests = $totalGuests->RAW();
+                }
+                $bookingData[$tourId]['totalGuests'] += (int) $totalGuests;
+                
+                $numChildren = $booking->NumberOfChildren;
+                if ($numChildren instanceof \SilverStripe\ORM\FieldType\DBField) {
+                    $numChildren = $numChildren->RAW();
+                }
+                $bookingData[$tourId]['children'] += (int) $numChildren;
+                $bookingData[$tourId]['adults'] += ((int) $totalGuests - (int) $numChildren);
+            }
+        }
+
         $tourData = [];
         foreach ($tours as $tour) {
-            $array = [];
-            $array['title'] = $tour->FullCalendarTitle();
-            $array['abrv-title'] = $tour->AbrvCalendarTitle();
-            $array['url'] = $this->Link('checkinfortour/' . $tour->ID . '/');
-            $array['start'] = $tour->Date . 'T' . $tour->StartTime;
-            $array['end'] = $tour->Date . 'T' . $tour->EndTimeObj()->Value;
-            $array['backgroundColor'] = '#16a335';
-            if ($tour->IsFull()->value) {
-                $array['backgroundColor'] = '#e83333';
+            $tourId = $tour->ID;
+            $totalSpaces = $tour->TotalSpacesAtStart ?: 0;
+            
+            // Get pre-calculated booking data
+            $stats = isset($bookingData[$tourId]) ? $bookingData[$tourId] : [
+                'count' => 0,
+                'totalGuests' => 0,
+                'adults' => 0,
+                'children' => 0
+            ];
+            
+            $totalGuestsBooked = $stats['totalGuests'];
+            $isFull = $tour->IsClosed || ($totalGuestsBooked >= $totalSpaces);
+            $spotsLeft = $totalSpaces - $totalGuestsBooked;
+            
+            // Build titles without database queries
+            if ($stats['count'] === 0) {
+                $title = 'No bookings (' . $totalSpaces . ' spots left)';
+                $abrvTitle = '0/' . $totalSpaces;
+            } else {
+                if ($isFull) {
+                    $title = 'Full: ' . $totalGuestsBooked;
+                    $abrvTitle = 'Full';
+                } else {
+                    $title = 'Spots Left: ' . $spotsLeft . '/' . $totalSpaces;
+                    $abrvTitle = 'SL: ' . $spotsLeft . '/' . $totalSpaces;
+                }
+                $title .= ' | Groups: ' . $stats['count'] . ' | Adults: ' . $stats['adults'] . ' | Children: ' . $stats['children'];
+                $abrvTitle .= ' | G: ' . $stats['count'] . ' | A: ' . $stats['adults'] . ' | C: ' . $stats['children'];
             }
+            
+            $array = [];
+            $array['title'] = $title;
+            $array['abrv-title'] = $abrvTitle;
+            $array['url'] = $this->Link('checkinfortour/' . $tourId . '/');
+            $array['start'] = $tour->Date . 'T' . $tour->StartTime;
+            
+            // Calculate end time without creating DBTime object
+            $startTS = strtotime(date('Y-m-d') . ' ' . $tour->StartTime);
+            $endTS = strtotime('+' . $tour->Duration . ' minute', $startTS);
+            $array['end'] = $tour->Date . 'T' . date('H:i:s', $endTS);
+            
+            $array['backgroundColor'] = $isFull ? '#e83333' : '#16a335';
+            
             $tourData[] = $array;
         }
 
@@ -506,10 +586,17 @@ class TourBookingPageController extends PageController
     public function ClosedDatesAsArray(): array
     {
         $closedData = [];
+        
+        // Optimize: Load all DateInfo records once instead of 365 database calls
+        $allDateInfos = DateInfo::get()
+            ->exclude(['Archived' => 1])
+            ->sort('SortOrder', 'DESC')
+            ->toArray();
+        
         for ($i = 1; $i <= 365; ++$i) {
             $dateTS = strtotime('today +' . $i . ' day');
-            $dateInfo = DateInfo::best_match_for_date($dateTS);
-            if ($dateInfo->NoTourTimes) {
+            $dateInfo = $this->findBestMatchForDate($dateTS, $allDateInfos);
+            if ($dateInfo && $dateInfo->NoTourTimes) {
                 $mysqlDate = date('Y-m-d', $dateTS);
                 $title = $dateInfo->PublicContent ? $dateInfo->dbObject('PublicContent')->Summary(10) : 'Closed';
                 $array = [];
@@ -523,6 +610,19 @@ class TourBookingPageController extends PageController
         }
 
         return $closedData;
+    }
+    
+    /**
+     * Optimized version of DateInfo::best_match_for_date() that works with pre-loaded data
+     */
+    private function findBestMatchForDate($dateTS, $dateInfos)
+    {
+        foreach ($dateInfos as $dateInfo) {
+            if ($dateInfo->IsDateMatch($dateTS)) {
+                return $dateInfo;
+            }
+        }
+        return false;
     }
 
     public function quickview($request)
