@@ -41,7 +41,7 @@
                     <h3 class="mt-5">Bookings</h3>
                 </header>
                 <ol id="list-of-bookings">
-                    <% loop $ValidBookings %>
+                    <% loop $ValidBookings.Sort('InitiatingSurname ASC, InitiatingFirstName ASC') %>
                         <li>
                             <h3>
                                 <a href="$EditLink(true)">$InitiatingFirstName $InitiatingSurname</a>
