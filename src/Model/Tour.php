@@ -538,7 +538,7 @@ class Tour extends TourBaseClass
 
     public function ValidBookings()
     {
-        return $this->Bookings()->exclude(['Cancelled' => 1]);
+        return $this->Bookings()->exclude(['Cancelled' => 1])->sort('InitiatingSurname ASC, InitiatingFirstName ASC');
     }
 
     public function JoinLink()

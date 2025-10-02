@@ -46,6 +46,7 @@
                             <h3>
                                 <a href="$EditLink(true)">$InitiatingFirstName $InitiatingSurname</a>
                                 <a href="$CMSEditLink" class="btn btn--red d-print-none" style="float: right;">Edit in CMS</a>
+                                <a href="$Top.Link(update)/$Code" class="btn btn--blue d-print-none" style="float: right; margin-right: 10px;" target="_blank">Update tickets</a>
                             </h3>
                             <% include Sunnysideup\Bookings\Includes\TourBookingsBookingDetailsForAdmin %>
 
